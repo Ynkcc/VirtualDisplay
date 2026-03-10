@@ -51,12 +51,28 @@ class MainViewModel(
     }
 
     private fun updateDisplayLists(managedIds: Set<Int>) {
-        _uiState.update { currentState ->
-            // 这里需要同步获取显示器列表，通常需要 Context
-            // 在 ViewModel 中我们可以稍微取巧，或者让调用方传入 Context
-            // 既然 refreshDisplays 已经有了逻辑，我们在这里只做简单的增量更新是不够的
-            // 更好的做法是让 Repository 提供 Flow<List<Display>>
-            currentState
+        // 由于需要 Context 获取完整的 DisplayManager 信息，
+        // 我们可以在 init 中保存一个参考，或者在 collect 时由外部触发。
+        // 但最简单的方法是在这里直接更新 displayIds 状态，
+        // 真正的同步由 repository 触发 refreshManagedDisplays，
+        // 然后 ViewModel 这里的 collect 会被叫到。
+        _uiState.update { it.copy(
+            displayIds = managedIds.toList(),
+            statusMessage = "Displays updated: ${managedIds.size}"
+        ) }
+    }
+
+    fun launchSelectedApp(context: Context, displayId: Int, packageName: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, statusMessage = "Launching $packageName on $displayId...") }
+            repository.launchApp(packageName, displayId)
+                .onSuccess {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Launched $packageName") }
+                }
+                .onFailure { e ->
+                    Log.e("MainViewModel", "Failed to launch app", e)
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Launch failed: ${e.message}") }
+                }
         }
     }
 
@@ -74,14 +90,14 @@ class MainViewModel(
         }
     }
 
-    fun createVirtualDisplay(context: Context) {
+    fun createVirtualDisplay(context: Context, width: Int = 1280, height: Int = 720, dpi: Int = 240) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Creating display...") }
+            _uiState.update { it.copy(isLoading = true, statusMessage = "Creating display ${width}x${height}...") }
             repository.createDisplay(
                 name = "Shizuku_VD_${System.currentTimeMillis()}",
-                width = 1280,
-                height = 720,
-                dpi = 240
+                width = width,
+                height = height,
+                dpi = dpi
             ).onSuccess { displayId ->
                 _uiState.update { it.copy(
                     isLoading = false, 

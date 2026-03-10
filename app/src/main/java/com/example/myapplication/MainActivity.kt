@@ -93,6 +93,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // 移除手动解绑，交给 repeatOnLifecycle 自动管理
+        Log.d("MainActivity", "onDestroy: unbinding service")
+        ShizukuDisplayBridge.unbindService()
     }
 }

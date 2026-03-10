@@ -54,7 +54,6 @@ class DisplayActivity : ComponentActivity() {
         ShizukuDisplayBridge.bindService(this)
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
 
         setContent {
             MyApplicationTheme {
@@ -98,11 +97,12 @@ class DisplayActivity : ComponentActivity() {
                         },
                     contentAlignment = Alignment.Center
                 ) {
-                    val screenH = constraints.maxHeight.toFloat()
-                    val isVDLandscape = (displayRatio ?: 1f) > 1f
-                    val vdLongSide = if (isVDLandscape) vdWidth else vdHeight
+                    val scale = if (vdWidth > 0 && vdHeight > 0) {
+                        val scaleW = constraints.maxWidth.toFloat() / vdWidth
+                        val scaleH = constraints.maxHeight.toFloat() / vdHeight
+                        minOf(scaleW, scaleH)
+                    } else 1f
                     
-                    val scale = if (vdLongSide > 0) screenH / vdLongSide else 1f
                     val viewW = vdWidth * scale
                     val viewH = vdHeight * scale
 
@@ -168,7 +168,6 @@ class DisplayActivity : ComponentActivity() {
                                 width = with(LocalDensity.current) { viewW.toDp() },
                                 height = with(LocalDensity.current) { viewH.toDp() }
                             )
-                            .then(if (isVDLandscape) Modifier.rotate(90f) else Modifier)
                     )
 
                     AnimatedVisibility(visible = !surfaceReady, enter = fadeIn(), exit = fadeOut()) {
@@ -218,11 +217,11 @@ class DisplayActivity : ComponentActivity() {
         super.onDestroy()
         Log.d(TAG, "onDestroy")
         
-        // 确保销毁时清理远程显示表面
+        // 确保销毁时清理远程显示表面，使用 Dispatchers.Main.immediate + NonCancellable 确保任务执行
         val id = remoteDisplayId
         if (id != null) {
             remoteDisplayId = null
-            CoroutineScope(Dispatchers.Main).launch {
+            CoroutineScope(Dispatchers.Main.immediate).launch(NonCancellable) {
                 try {
                     ShizukuDisplayBridge.setDisplaySurface(id, null)
                     Log.d(TAG, "Cleared display surface in onDestroy for #$id")
@@ -241,20 +240,24 @@ class DisplayActivity : ComponentActivity() {
         vdW: Float, vdH: Float
     ) {
         val newEvent = MotionEvent.obtain(event)
-        val scaleX = vdW / viewW
-        val scaleY = vdH / viewH
-        val finalX = event.x * scaleX
-        val finalY = event.y * scaleY
+        
+        // 简化坐标转换逻辑：现在 Activity 允许旋转，不再强制旋转 SurfaceView
+        // 只需要简单的比例缩放即可
+        val finalX = event.x * (vdW / viewW)
+        val finalY = event.y * (vdH / viewH)
 
         newEvent.setLocation(finalX, finalY)
         newEvent.source = InputDevice.SOURCE_TOUCHSCREEN
 
-        // 复用 scrcpy 方案：setDisplayId 在 Shizuku 特权进程内完成，
-        // 避免 app 侧反射调用静默失败导致触摸路由到默认屏幕。
-        Log.v(TAG, "Injecting touch event to display #$displayId at ($finalX, $finalY)")
+        Log.v(TAG, "Injecting touch event to display #$displayId: original(${event.x}, ${event.y}) -> mapped($finalX, $finalY)")
+        
+        // 在协程内注入，并在注入完成后回收 MotionEvent，防止 recycled object 异常
         CoroutineScope(Dispatchers.Main).launch {
-            ShizukuDisplayBridge.injectInputWithDisplayId(newEvent, displayId)
+            try {
+                ShizukuDisplayBridge.injectInputWithDisplayId(newEvent, displayId)
+            } finally {
+                newEvent.recycle()
+            }
         }
-        newEvent.recycle()
     }
 }

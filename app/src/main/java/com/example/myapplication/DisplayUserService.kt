@@ -58,15 +58,22 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
         val vd = activeDisplays.remove(displayId)
         if (vd != null) {
             vd.release()
-            Log.d(TAG, "Display $displayId released")
+            Log.d(TAG, "Display $displayId released successfully")
         } else {
-            Log.w(TAG, "releaseVirtualDisplay: Display $displayId not found")
+            Log.w(TAG, "releaseVirtualDisplay: Display $displayId not found in activeDisplays map. It might be a 'zombie' display or already released.")
+            // 注意：如果没有 VirtualDisplay 引用，在 Android 中很难通过 IDisplayManager 远程释放一个 VirtualDisplay，
+            // 除非进程退出导致系统自动回收。
         }
     }
 
     override fun injectInputEvent(event: InputEvent, mode: Int): Boolean {
         Log.v(TAG, "injectInputEvent: $event, mode=$mode")
-        return ServiceManager.getInputManager().injectInputEvent(event, mode)
+        return try {
+            ServiceManager.getInputManager().injectInputEvent(event, mode)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to inject input event", e)
+            false
+        }
     }
 
     /**
@@ -75,7 +82,12 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
      */
     override fun injectKeyEvent(action: Int, keyCode: Int, repeat: Int, metaState: Int, displayId: Int, mode: Int): Boolean {
         Log.v(TAG, "injectKeyEvent: action=$action, keyCode=$keyCode, displayId=$displayId, mode=$mode")
-        return Device.injectKeyEvent(action, keyCode, repeat, metaState, displayId, mode)
+        return try {
+            Device.injectKeyEvent(action, keyCode, repeat, metaState, displayId, mode)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to inject key event", e)
+            false
+        }
     }
 
     /**
@@ -84,14 +96,24 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
      */
     override fun injectInputEventWithDisplayId(event: InputEvent, displayId: Int, mode: Int): Boolean {
         Log.v(TAG, "injectInputEventWithDisplayId: displayId=$displayId, mode=$mode, event=$event")
-        return Device.injectEvent(event, displayId, mode)
+        return try {
+            Device.injectEvent(event, displayId, mode)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to inject input event with displayId", e)
+            false
+        }
     }
 
     override fun startActivity(intent: Intent, options: Bundle?): Int {
         Log.d(TAG, "startActivity: intent=$intent")
-        val result = ServiceManager.getActivityManager().startActivity(intent, options)
-        Log.d(TAG, "startActivity result: $result")
-        return result
+        return try {
+            val result = ServiceManager.getActivityManager().startActivity(intent, options)
+            Log.d(TAG, "startActivity result: $result")
+            result
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start activity", e)
+            -1
+        }
     }
 
     override fun getActiveDisplayIds(): IntArray {
@@ -101,10 +123,16 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
     }
 
     override fun destroy() {
-        Log.d(TAG, "destroy: releasing all displays")
-        val ids = activeDisplays.keys.toList()
-        ids.forEach { id ->
-            activeDisplays.remove(id)?.release()
+        Log.d(TAG, "DisplayUserService destroy: releasing ${activeDisplays.size} displays")
+        val iterator = activeDisplays.values.iterator()
+        while (iterator.hasNext()) {
+            val vd = iterator.next()
+            try {
+                vd.release()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error releasing display during service destroy", e)
+            }
+            iterator.remove()
         }
         activeDisplays.clear()
     }

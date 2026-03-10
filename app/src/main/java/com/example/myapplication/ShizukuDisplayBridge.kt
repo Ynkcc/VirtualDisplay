@@ -1,19 +1,20 @@
 package com.example.myapplication
 
+import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
+import android.view.Display
 import android.view.InputEvent
 import android.view.Surface
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.*
 import rikka.shizuku.Shizuku
 
 object ShizukuDisplayBridge : IDisplayRepository {
@@ -30,26 +31,48 @@ object ShizukuDisplayBridge : IDisplayRepository {
     private lateinit var binder: ShizukuServiceBinder
     private var displayService: IDisplayService? = null
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    
+    private var displayManager: DisplayManager? = null
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {
+            Log.d(TAG, "onDisplayAdded: $displayId")
+            refreshManagedDisplays()
+        }
+        override fun onDisplayRemoved(displayId: Int) {
+            Log.d(TAG, "onDisplayRemoved: $displayId")
+            refreshManagedDisplays()
+        }
+        override fun onDisplayChanged(displayId: Int) {
+            refreshManagedDisplays()
+        }
+    }
 
     fun initialize(context: Context) {
-        if (::binder.isInitialized) return
-        binder = ShizukuServiceBinder(context.applicationContext)
-        
-        scope.launch {
-            binder.connectionStatus.collect { status ->
-                _connectionStatus.value = status
-                if (status == ConnectionStatus.CONNECTED) {
-                    refreshManagedDisplays()
-                } else if (status == ConnectionStatus.DISCONNECTED || status == ConnectionStatus.IDLE) {
-                    _managedDisplayIds.value = emptySet()
+        if (!::binder.isInitialized) {
+            binder = ShizukuServiceBinder(context.applicationContext)
+            
+            scope.launch {
+                binder.connectionStatus.collect { status ->
+                    _connectionStatus.value = status
+                    if (status == ConnectionStatus.CONNECTED) {
+                        refreshManagedDisplays()
+                    } else if (status == ConnectionStatus.DISCONNECTED || status == ConnectionStatus.IDLE) {
+                        _managedDisplayIds.value = emptySet()
+                    }
+                }
+            }
+
+            scope.launch {
+                binder.service.collect { service ->
+                    displayService = service
                 }
             }
         }
-
-        scope.launch {
-            binder.service.collect { service ->
-                displayService = service
-            }
+        
+        if (displayManager == null) {
+            displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            displayManager?.registerDisplayListener(displayListener, null)
+            Log.d(TAG, "DisplayListener registered in initialize")
         }
     }
 
@@ -63,6 +86,8 @@ object ShizukuDisplayBridge : IDisplayRepository {
     }
 
     override fun unbindService() {
+        displayManager?.unregisterDisplayListener(displayListener)
+        displayManager = null // 设置为 null，以便下次 initialize 时重新注册
         if (::binder.isInitialized) {
             binder.unbind()
         }
@@ -106,7 +131,20 @@ object ShizukuDisplayBridge : IDisplayRepository {
     }
 
     override suspend fun launchApp(packageName: String, displayId: Int): Result<Int> = withContext(Dispatchers.IO) {
-        Result.failure(UnsupportedOperationException("Use launchApp(intent, options) instead"))
+        runCatching {
+            val svc = displayService ?: throw IllegalStateException("Service not connected")
+            val intent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                setPackage(packageName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            
+            val options = ActivityOptions.makeBasic().apply {
+                launchDisplayId = displayId
+            }.toBundle()
+            
+            svc.startActivity(intent, options)
+        }
     }
     
     suspend fun startActivity(intent: Intent, options: Bundle?): Result<Int> = withContext(Dispatchers.IO) {

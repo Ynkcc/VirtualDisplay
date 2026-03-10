@@ -106,7 +106,12 @@ fun VirtualDisplayScreen(
                                 }
                                 context.startActivity(intent)
                             },
-                            onDelete = { viewModel.releaseDisplay(id, context) }
+                            onDelete = { viewModel.releaseDisplay(id, context) },
+                            onLaunch = {
+                                selectedApp?.let { app ->
+                                    viewModel.launchSelectedApp(context, id, app.packageName)
+                                }
+                            }
                         )
                     }
                 }
