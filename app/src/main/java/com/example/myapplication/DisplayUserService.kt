@@ -1,45 +1,32 @@
 package com.example.myapplication
 
 import android.content.Context
+import android.content.Intent
 import android.hardware.display.VirtualDisplay
+import android.os.Bundle
 import android.util.Log
 import android.view.InputEvent
 import android.view.Surface
-import android.content.Intent
-import android.os.Bundle
 import androidx.annotation.Keep
 import com.genymobile.scrcpy.Workarounds
+import com.genymobile.scrcpy.device.Device
 import com.genymobile.scrcpy.wrappers.ServiceManager
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 
-/**
- * Shizuku UserService 运行在特权进程中。
- * 必须提供一个带有 Context 参数的构造函数。
- */
 class DisplayUserService @Keep constructor(context: Context) : IDisplayService.Stub() {
 
     companion object {
-        private const val tag = "DisplayUserService"
+        private const val TAG = "DisplayUserService"
         private val activeDisplays = mutableMapOf<Int, VirtualDisplay>()
     }
 
     init {
-        Log.d(tag, "DisplayUserService initializing in process: ${getCurrentProcessName()}")
-        try {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                HiddenApiBypass.addHiddenApiExemptions("")
-            }
-        } catch (t: Throwable) {
-            Log.e(tag, "Failed to bypass hidden api", t)
+        Log.d(TAG, "DisplayUserService init in process: ${getCurrentProcessName()}")
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            HiddenApiBypass.addHiddenApiExemptions("")
         }
-
-        try {
-            // Apply scrcpy's Android environment workarounds for bare Java process wrappers
-            Workarounds.apply()
-            Log.d(tag, "Scrcpy workarounds applied successfully")
-        } catch (t: Throwable) {
-            Log.e(tag, "Failed to apply Scrcpy workarounds", t)
-        }
+        Workarounds.apply()
+        Log.d(TAG, "Workarounds applied successfully")
     }
 
     private fun getCurrentProcessName(): String {
@@ -47,108 +34,78 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
     }
 
     override fun setVirtualDisplaySurface(displayId: Int, surface: Surface?) {
+        Log.d(TAG, "setVirtualDisplaySurface: displayId=$displayId, surface=$surface")
         val vd = activeDisplays[displayId]
-        if (vd != null) {
-            try {
-                vd.surface = surface
-                Log.d(tag, "Successfully set surface for VirtualDisplay id=$displayId")
-            } catch (e: Exception) {
-                Log.e(tag, "Failed to set surface for VirtualDisplay id=$displayId", e)
-            }
-        } else {
-            Log.w(tag, "setVirtualDisplaySurface: VirtualDisplay id=$displayId not found in this service instance (orphan?)")
+        if (vd == null) {
+            Log.e(TAG, "setVirtualDisplaySurface: Display $displayId not found in activeDisplays")
+            return
         }
+        vd.surface = surface
     }
 
-    override fun createVirtualDisplay(
-        name: String?,
-        width: Int,
-        height: Int,
-        dpi: Int,
-        surface: Surface?,
-        flags: Int
-    ): Int {
-        Log.d(tag, "createVirtualDisplay: name=$name, size=${width}x${height}, dpi=$dpi, hasSurface=${surface != null}, flags=$flags")
-        return try {
-            val displayManager = ServiceManager.getDisplayManager()
-            // 使用 scrcpy wrapper 创建虚拟显示器
-            val vd = displayManager.createNewVirtualDisplay(name ?: "vd", width, height, dpi, surface, flags)
-            val displayId = vd.display.displayId
-            activeDisplays[displayId] = vd
-            Log.d(tag, "Successfully created VirtualDisplay id=$displayId, total managed=${activeDisplays.size}")
-            displayId
-        } catch (e: Throwable) {
-            Log.e(tag, "Failed to create VirtualDisplay using scrcpy wrappers", e)
-            -1
-        }
+    override fun createVirtualDisplay(name: String?, width: Int, height: Int, dpi: Int, surface: Surface?, flags: Int): Int {
+        Log.d(TAG, "createVirtualDisplay: name=$name, size=${width}x$height, dpi=$dpi, flags=0x${Integer.toHexString(flags)}")
+        val displayManager = ServiceManager.getDisplayManager()
+        val vd = displayManager.createNewVirtualDisplay(name ?: "vd", width, height, dpi, surface, flags)
+        val displayId = vd.display.displayId
+        activeDisplays[displayId] = vd
+        Log.d(TAG, "Created virtual display: id=$displayId")
+        return displayId
     }
 
     override fun releaseVirtualDisplay(displayId: Int) {
+        Log.d(TAG, "releaseVirtualDisplay: displayId=$displayId")
         val vd = activeDisplays.remove(displayId)
         if (vd != null) {
-            try {
-                vd.release()
-                Log.d(tag, "Released VirtualDisplay id=$displayId, remaining=${activeDisplays.size}")
-            } catch (e: Exception) {
-                Log.e(tag, "Failed to release VirtualDisplay id=$displayId", e)
-            }
+            vd.release()
+            Log.d(TAG, "Display $displayId released")
         } else {
-            // 孤儿显示器：本 service 实例不持有该 VirtualDisplay 的句柄。
-            // 这通常是因为产生了 service 进程重建（App 重启导致旧的 activeDisplays 丢失）。
-            // 在这种情况下无法通过 Java API 销毁，系统侧的 VirtualDisplay 会在其宿主进程死亡时自动清理。
-            Log.w(tag, "releaseVirtualDisplay: displayId=$displayId not found in this service instance. " +
-                "This is an orphan display from a previous service lifecycle. " +
-                "It cannot be released without its original VirtualDisplay handle.")
+            Log.w(TAG, "releaseVirtualDisplay: Display $displayId not found")
         }
     }
 
-    override fun injectInputEvent(event: InputEvent?, mode: Int): Boolean {
-        if (event == null) return false
-        return try {
-            ServiceManager.getInputManager().injectInputEvent(event, mode)
-        } catch (e: Exception) {
-            Log.e(tag, "Failed to inject input event", e)
-            false
-        }
-    }
-
-    override fun startActivity(intent: Intent?, options: Bundle?): Int {
-        if (intent == null) return 0
-        return try {
-            ServiceManager.getActivityManager().startActivity(intent, options)
-        } catch (e: Exception) {
-            Log.e(tag, "Failed to start activity", e)
-            0
-        }
+    override fun injectInputEvent(event: InputEvent, mode: Int): Boolean {
+        Log.v(TAG, "injectInputEvent: $event, mode=$mode")
+        return ServiceManager.getInputManager().injectInputEvent(event, mode)
     }
 
     /**
-     * 返回当前 service 实例实际持有句柄的 displayId 列表。
-     * 调用方可用此列表与系统 DisplayManager.getDisplays() 对比，
-     * 找出"孤儿显示器"（系统中存在但本实例无法管理的显示器）。
+     * 复用 scrcpy Device.injectKeyEvent：在特权进程内构造 KeyEvent，
+     * 通过 InputEvent.setDisplayId() 绑定目标屏幕后再注入，保证路由到正确 display。
      */
+    override fun injectKeyEvent(action: Int, keyCode: Int, repeat: Int, metaState: Int, displayId: Int, mode: Int): Boolean {
+        Log.v(TAG, "injectKeyEvent: action=$action, keyCode=$keyCode, displayId=$displayId, mode=$mode")
+        return Device.injectKeyEvent(action, keyCode, repeat, metaState, displayId, mode)
+    }
+
+    /**
+     * 复用 scrcpy Device.injectEvent：在特权进程内对 InputEvent（含 MotionEvent）
+     * 调用 setDisplayId，避免 app 进程反射失效导致触摸路由到默认屏幕。
+     */
+    override fun injectInputEventWithDisplayId(event: InputEvent, displayId: Int, mode: Int): Boolean {
+        Log.v(TAG, "injectInputEventWithDisplayId: displayId=$displayId, mode=$mode, event=$event")
+        return Device.injectEvent(event, displayId, mode)
+    }
+
+    override fun startActivity(intent: Intent, options: Bundle?): Int {
+        Log.d(TAG, "startActivity: intent=$intent")
+        val result = ServiceManager.getActivityManager().startActivity(intent, options)
+        Log.d(TAG, "startActivity result: $result")
+        return result
+    }
+
     override fun getActiveDisplayIds(): IntArray {
-        return activeDisplays.keys.toIntArray().also {
-            Log.d(tag, "getActiveDisplayIds: returning ${it.size} ids: ${it.toList()}")
-        }
+        val ids = activeDisplays.keys.toIntArray()
+        Log.v(TAG, "getActiveDisplayIds: ${ids.contentToString()}")
+        return ids
     }
 
     override fun destroy() {
-        Log.d(tag, "destroy() called, releasing all displays")
-        // 先逐一释放，确保系统侧 VirtualDisplay 得到清理
+        Log.d(TAG, "destroy: releasing all displays")
         val ids = activeDisplays.keys.toList()
         ids.forEach { id ->
-            val vd = activeDisplays.remove(id)
-            try {
-                vd?.release()
-                Log.d(tag, "destroy: Released VirtualDisplay id=$id")
-            } catch (_: Exception) {}
+            activeDisplays.remove(id)?.release()
         }
         activeDisplays.clear()
-        // daemon 模式：不调用 System.exit(0)。
-        // 进程的生命周期由 Shizuku 管理（unbindUserService(destroy=true) 时会终止进程）。
-        // 如果上层通过 ShizukuDisplayBridge.destroyService() 调用，
-        // Shizuku 会在 unbind 后自动杀死本进程。
-        Log.d(tag, "destroy: All displays released, daemon process remains alive for reuse")
     }
 }

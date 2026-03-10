@@ -45,6 +45,7 @@
             android:name=".DisplayActivity"
             android:exported="false"
             android:label="Display Player"
+            android:enableOnBackInvokedCallback="false"
             android:theme="@style/Theme.MyApplication" />
 
     </application>
