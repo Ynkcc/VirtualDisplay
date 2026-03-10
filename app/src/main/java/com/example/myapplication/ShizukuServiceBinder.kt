@@ -42,18 +42,22 @@ class ShizukuServiceBinder(private val context: Context) {
         if (_connectionStatus.value == ConnectionStatus.CONNECTED || 
             _connectionStatus.value == ConnectionStatus.BINDING) return
 
+        if (Shizuku.checkSelfPermission() != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "Shizuku permission not granted, skipping bind")
+            _connectionStatus.value = ConnectionStatus.ERROR
+            return
+        }
+
         Log.d(TAG, "Binding Shizuku user service...")
         _connectionStatus.value = ConnectionStatus.BINDING
 
-        if (userServiceArgs == null) {
-            userServiceArgs = Shizuku.UserServiceArgs(
-                ComponentName(context.packageName, DisplayUserService::class.java.name)
-            )
-                .daemon(true)
-                .processNameSuffix("display_service")
-                .debuggable(BuildConfig.DEBUG)
-                .version(BuildConfig.VERSION_CODE)
-        }
+        userServiceArgs = Shizuku.UserServiceArgs(
+            ComponentName(context.packageName, DisplayUserService::class.java.name)
+        )
+            .daemon(true)
+            .processNameSuffix("display_service")
+            .debuggable(BuildConfig.DEBUG)
+            .version(BuildConfig.VERSION_CODE)
 
         try {
             Shizuku.bindUserService(userServiceArgs!!, serviceConnection)
@@ -72,6 +76,7 @@ class ShizukuServiceBinder(private val context: Context) {
             Log.e(TAG, "Failed to unbind service", e)
         }
         _service.value = null
+        userServiceArgs = null
         _connectionStatus.value = ConnectionStatus.IDLE
     }
 }

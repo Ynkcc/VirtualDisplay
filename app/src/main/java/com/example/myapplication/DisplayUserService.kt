@@ -14,11 +14,9 @@ import com.genymobile.scrcpy.Workarounds
 import com.genymobile.scrcpy.device.Device
 import com.genymobile.scrcpy.wrappers.ServiceManager
 import org.lsposed.hiddenapibypass.HiddenApiBypass
-import org.json.JSONArray
-import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
-class DisplayUserService @Keep constructor(context: Context) : IDisplayService.Stub() {
+class DisplayUserService @Keep constructor(private val context: Context) : IDisplayService.Stub() {
 
     private data class DisplayRecord(
         val displayId: Int,
@@ -34,27 +32,28 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
 
     companion object {
         private const val TAG = "DisplayUserService"
-        private const val PREFS_NAME = "display_user_service"
-        private const val PREFS_KEY_RECORDS = "records"
         private val KNOWN_MANAGED_NAME_PREFIXES = listOf("Shizuku_VD_", "vd")
     }
 
-    private val appContext = context.applicationContext
     private val displayManager by lazy {
-        appContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
     }
 
     private val activeDisplays = ConcurrentHashMap<Int, VirtualDisplay>()
     private val knownDisplays = ConcurrentHashMap<Int, DisplayRecord>()
 
     init {
-        Log.d(TAG, "DisplayUserService init in process: ${getCurrentProcessName()}")
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-            HiddenApiBypass.addHiddenApiExemptions("")
+        try {
+            Log.d(TAG, "DisplayUserService init in process: ${getCurrentProcessName()}")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                HiddenApiBypass.addHiddenApiExemptions("")
+            }
+            Workarounds.apply()
+            Log.d(TAG, "Workarounds applied successfully")
+            reconcileKnownDisplaysWithSystem()
+        } catch (e: Throwable) {
+            Log.e(TAG, "Critical error during service initialization", e)
         }
-        Workarounds.apply()
-        Log.d(TAG, "Workarounds applied successfully")
-        restoreAndReconcileDisplays()
     }
 
     private fun getCurrentProcessName(): String {
@@ -84,7 +83,6 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
                 isOrphan = false
                 lastSeenAtMs = System.currentTimeMillis()
             }
-            persistDisplayRecords()
         } catch (e: Exception) {
             Log.e(TAG, "setVirtualDisplaySurface failed for displayId=$displayId", e)
             try {
@@ -123,13 +121,11 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
             try {
                 vd.release()
                 knownDisplays.remove(displayId)
-                persistDisplayRecords()
                 Log.d(TAG, "Display $displayId released successfully")
             } catch (e: Exception) {
                 Log.e(TAG, "releaseVirtualDisplay failed for active handle: displayId=$displayId", e)
                 knownDisplays[displayId]?.isOrphan = true
                 knownDisplays[displayId]?.lastSeenAtMs = System.currentTimeMillis()
-                persistDisplayRecords()
             }
         } else {
             val known = knownDisplays[displayId]
@@ -140,12 +136,10 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
             val released = bestEffortReleaseOrphan(displayId)
             if (released) {
                 knownDisplays.remove(displayId)
-                persistDisplayRecords()
                 Log.d(TAG, "releaseVirtualDisplay: orphan display $displayId released by fallback path")
             } else {
                 known.isOrphan = true
                 known.lastSeenAtMs = System.currentTimeMillis()
-                persistDisplayRecords()
                 Log.w(TAG, "releaseVirtualDisplay: orphan display $displayId cannot be released without recoverable handle")
             }
         }
@@ -161,10 +155,6 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
         }
     }
 
-    /**
-     * 复用 scrcpy Device.injectKeyEvent：在特权进程内构造 KeyEvent，
-     * 通过 InputEvent.setDisplayId() 绑定目标屏幕后再注入，保证路由到正确 display。
-     */
     override fun injectKeyEvent(action: Int, keyCode: Int, repeat: Int, metaState: Int, displayId: Int, mode: Int): Boolean {
         Log.v(TAG, "injectKeyEvent: action=$action, keyCode=$keyCode, displayId=$displayId, mode=$mode")
         return try {
@@ -175,10 +165,6 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
         }
     }
 
-    /**
-     * 复用 scrcpy Device.injectEvent：在特权进程内对 InputEvent（含 MotionEvent）
-     * 调用 setDisplayId，避免 app 进程反射失效导致触摸路由到默认屏幕。
-     */
     override fun injectInputEventWithDisplayId(event: InputEvent, displayId: Int, mode: Int): Boolean {
         Log.v(TAG, "injectInputEventWithDisplayId: displayId=$displayId, mode=$mode, event=$event")
         return try {
@@ -223,7 +209,10 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
         }
         activeDisplays.clear()
         knownDisplays.clear()
-        persistDisplayRecords()
+        
+        Log.i(TAG, "Service process exiting.")
+        android.os.Process.killProcess(android.os.Process.myPid())
+        java.lang.System.exit(0)
     }
 
     private fun registerDisplay(
@@ -247,12 +236,6 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
             lastSeenAtMs = System.currentTimeMillis(),
             isOrphan = false,
         )
-        persistDisplayRecords()
-    }
-
-    private fun restoreAndReconcileDisplays() {
-        restoreDisplayRecords()
-        reconcileKnownDisplaysWithSystem()
     }
 
     private fun reconcileKnownDisplaysWithSystem() {
@@ -277,7 +260,7 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
                     name = display.name ?: "vd",
                     width = display.mode?.physicalWidth ?: 0,
                     height = display.mode?.physicalHeight ?: 0,
-                    dpi = appContext.resources.displayMetrics.densityDpi,
+                    dpi = context.resources.displayMetrics.densityDpi,
                     flags = 0,
                     createdAtMs = now,
                     lastSeenAtMs = now,
@@ -286,69 +269,11 @@ class DisplayUserService @Keep constructor(context: Context) : IDisplayService.S
                 Log.w(TAG, "Discovered orphan display: id=${display.displayId}, name=${display.name}")
             }
         }
-
-        persistDisplayRecords()
     }
 
     private fun isLikelyManagedDisplay(display: Display): Boolean {
         val displayName = display.name ?: return false
         return KNOWN_MANAGED_NAME_PREFIXES.any { displayName.startsWith(it) }
-    }
-
-    private fun persistDisplayRecords() {
-        runCatching {
-            val arr = JSONArray()
-            knownDisplays.values.forEach { record ->
-                arr.put(
-                    JSONObject()
-                        .put("displayId", record.displayId)
-                        .put("name", record.name)
-                        .put("width", record.width)
-                        .put("height", record.height)
-                        .put("dpi", record.dpi)
-                        .put("flags", record.flags)
-                        .put("createdAtMs", record.createdAtMs)
-                        .put("lastSeenAtMs", record.lastSeenAtMs)
-                        .put("isOrphan", record.isOrphan)
-                )
-            }
-            appContext
-                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .putString(PREFS_KEY_RECORDS, arr.toString())
-                .apply()
-        }.onFailure {
-            Log.e(TAG, "persistDisplayRecords failed", it)
-        }
-    }
-
-    private fun restoreDisplayRecords() {
-        runCatching {
-            val raw = appContext
-                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(PREFS_KEY_RECORDS, null)
-                ?: return
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                val record = DisplayRecord(
-                    displayId = obj.getInt("displayId"),
-                    name = obj.optString("name", "vd"),
-                    width = obj.optInt("width", 0),
-                    height = obj.optInt("height", 0),
-                    dpi = obj.optInt("dpi", appContext.resources.displayMetrics.densityDpi),
-                    flags = obj.optInt("flags", 0),
-                    createdAtMs = obj.optLong("createdAtMs", System.currentTimeMillis()),
-                    lastSeenAtMs = obj.optLong("lastSeenAtMs", System.currentTimeMillis()),
-                    isOrphan = obj.optBoolean("isOrphan", true),
-                )
-                knownDisplays[record.displayId] = record
-            }
-            Log.d(TAG, "restoreDisplayRecords: restored=${knownDisplays.size}")
-        }.onFailure {
-            Log.e(TAG, "restoreDisplayRecords failed", it)
-            knownDisplays.clear()
-        }
     }
 
     private fun bestEffortReleaseOrphan(displayId: Int): Boolean {
