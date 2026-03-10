@@ -187,8 +187,18 @@ object ShizukuDisplayBridge : IDisplayRepository {
     }
 
     private fun buildDefaultFlags(): Int {
-        var flags = 1 or 2 or 8 or 64 or 128 or 256 or 512 // 对应系统常量
+        // VIRTUAL_DISPLAY_FLAG_PUBLIC = 1 << 0
+        // VIRTUAL_DISPLAY_FLAG_PRESENTATION = 1 << 1
+        // VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY = 1 << 3
+        // VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT = 1 << 6
+        // VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL = 1 << 7
+        // VIRTUAL_DISPLAY_FLAG_TRUSTED = 1 << 8 (关键：允许输入注入)
+        // VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP = 1 << 9
+        
+        var flags = 1 or 2 or 8 or 64 or 128 or 256 or 512
         if (Build.VERSION.SDK_INT >= 33) {
+            // VIRTUAL_DISPLAY_FLAG_ALWAYS_UNLOCKED = 1 << 10
+            // VIRTUAL_DISPLAY_FLAG_TOUCH_FEEDBACK_DISABLED = 1 << 11
             flags = flags or 1024 or 2048 or 4096 or 8192
             if (Build.VERSION.SDK_INT >= 34) {
                 flags = flags or 16384 or 32768

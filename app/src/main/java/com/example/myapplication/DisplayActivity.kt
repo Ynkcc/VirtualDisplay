@@ -153,14 +153,36 @@ class DisplayActivity : ComponentActivity() {
                                     }
                                 })
 
+                                 var lastActionDownTime = 0L
                                  setOnTouchListener { view, event ->
                                     val targetDisplayId = remoteDisplayId ?: return@setOnTouchListener false
+                                    
+                                    // 确保坐标和尺寸有效
+                                    if (view.width <= 0 || view.height <= 0 || vdWidth <= 0 || vdHeight <= 0) {
+                                        return@setOnTouchListener false
+                                    }
+
                                     injectTouchEvent(
                                         event, targetDisplayId,
                                         view.width.toFloat(), view.height.toFloat(),
                                         vdWidth.toFloat(), vdHeight.toFloat()
                                     )
-                                    false
+                                    
+                                    // 处理点击以切换控制栏（因为返回 true 会拦截父容器的手势检测）
+                                    when (event.action) {
+                                        MotionEvent.ACTION_DOWN -> {
+                                            lastActionDownTime = System.currentTimeMillis()
+                                        }
+                                        MotionEvent.ACTION_UP -> {
+                                            val duration = System.currentTimeMillis() - lastActionDownTime
+                                            if (duration < 300) { // 简单判定为点击
+                                                showControls = !showControls
+                                                if (showControls) scheduleHideControls()
+                                            }
+                                        }
+                                    }
+                                    
+                                    true // 必须返回 true 以接收后续事件（MOVE/UP）
                                 }
                             }
                         },
@@ -242,20 +264,25 @@ class DisplayActivity : ComponentActivity() {
     ) {
         val newEvent = MotionEvent.obtain(event)
         
-        // 简化坐标转换逻辑：现在 Activity 允许旋转，不再强制旋转 SurfaceView
-        // 只需要简单的比例缩放即可
-        val finalX = event.x * (vdW / viewW)
-        val finalY = event.y * (vdH / viewH)
-
-        newEvent.setLocation(finalX, finalY)
+        // 使用 Matrix 进行整体缩放转换，这能处理所有触控点（多指）和历史轨迹
+        val matrix = android.graphics.Matrix()
+        matrix.postScale(vdW / viewW, vdH / viewH)
+        newEvent.transform(matrix)
+        
         newEvent.source = InputDevice.SOURCE_TOUCHSCREEN
 
-        Log.v(TAG, "Injecting touch event to display #$displayId: original(${event.x}, ${event.y}) -> mapped($finalX, $finalY)")
-        
-        // 在协程内注入，并在注入完成后回收 MotionEvent，防止 recycled object 异常
+        // 在协程内注入，并在注入完成后回收 MotionEvent
         lifecycleScope.launch(Dispatchers.Main.immediate) {
             try {
-                ShizukuDisplayBridge.injectInputWithDisplayId(newEvent, displayId)
+                val result = ShizukuDisplayBridge.injectInputWithDisplayId(newEvent, displayId)
+                if (result.isFailure) {
+                    Log.e(TAG, "Failed to inject input: ${result.exceptionOrNull()?.message}")
+                } else if (result.getOrNull() == false) {
+                    // 如果返回 false，可能是权限不足（如 MIUI 安全设置）
+                    Log.w(TAG, "Input injection returned false for display #$displayId - check Security Settings/Permissions")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Exception during input injection", e)
             } finally {
                 newEvent.recycle()
             }
