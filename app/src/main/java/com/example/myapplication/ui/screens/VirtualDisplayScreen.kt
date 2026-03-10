@@ -21,6 +21,9 @@ import com.example.myapplication.models.AppInfo
 import com.example.myapplication.ui.components.AppSelectionDialog
 import com.example.myapplication.ui.components.DisplayItem
 
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+
 @Composable
 fun VirtualDisplayScreen(
     viewModel: MainViewModel,
@@ -52,8 +55,39 @@ fun VirtualDisplayScreen(
                 }
             }
             
-            Text(text = "Status: $status", modifier = Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
+            Text(text = "Status: $status", modifier = Modifier.padding(vertical = 4.dp), style = MaterialTheme.typography.bodySmall, color = if (status.startsWith("Error")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
             
+            // 分辨率输入行
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = uiState.inputWidth,
+                    onValueChange = { viewModel.updateInputs(width = it) },
+                    label = { Text("Width") },
+                    modifier = Modifier.weight(1f),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = uiState.inputHeight,
+                    onValueChange = { viewModel.updateInputs(height = it) },
+                    label = { Text("Height") },
+                    modifier = Modifier.weight(1f),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = uiState.inputDpi,
+                    onValueChange = { viewModel.updateInputs(dpi = it) },
+                    label = { Text("DPI") },
+                    modifier = Modifier.weight(0.8f),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true
+                )
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -75,9 +109,10 @@ fun VirtualDisplayScreen(
 
                 Button(
                     onClick = { viewModel.createVirtualDisplay(context) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
+                    enabled = !uiState.isLoading
                 ) {
-                    Text(text = "Create")
+                    Text(text = if (uiState.isLoading) "..." else "Create")
                 }
             }
 

@@ -90,14 +90,41 @@ class MainViewModel(
         }
     }
 
-    fun createVirtualDisplay(context: Context, width: Int = 1280, height: Int = 720, dpi: Int = 240) {
+    fun updateInputs(width: String? = null, height: String? = null, dpi: String? = null) {
+        _uiState.update { state ->
+            state.copy(
+                inputWidth = width ?: state.inputWidth,
+                inputHeight = height ?: state.inputHeight,
+                inputDpi = dpi ?: state.inputDpi
+            )
+        }
+    }
+
+    fun createVirtualDisplay(context: Context) {
+        val state = _uiState.value
+        val w = state.inputWidth.toIntOrNull() ?: 0
+        val h = state.inputHeight.toIntOrNull() ?: 0
+        val d = state.inputDpi.toIntOrNull() ?: 0
+
+        if (w <= 0 || h <= 0 || d <= 0) {
+            _uiState.update { it.copy(statusMessage = "Error: Invalid dimensions or DPI") }
+            return
+        }
+
+        // 校验比例：长宽比/宽长比 =< 2.5
+        val ratio = if (w > h) w.toFloat() / h else h.toFloat() / w
+        if (ratio > 2.5f) {
+            _uiState.update { it.copy(statusMessage = "Error: Aspect ratio too extreme (max 2.5, current ${String.format("%.2f", ratio)})") }
+            return
+        }
+
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Creating display ${width}x${height}...") }
+            _uiState.update { it.copy(isLoading = true, statusMessage = "Creating display ${w}x${h}...") }
             repository.createDisplay(
                 name = "Shizuku_VD_${System.currentTimeMillis()}",
-                width = width,
-                height = height,
-                dpi = dpi
+                width = w,
+                height = h,
+                dpi = d
             ).onSuccess { displayId ->
                 _uiState.update { it.copy(
                     isLoading = false, 

@@ -11,5 +11,10 @@ data class MainUiState(
     val displayIds: List<Int> = emptyList(),
     val orphanDisplayIds: List<Int> = emptyList(),
     val statusMessage: String = "Ready",
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    
+    // 输入相关状态
+    val inputWidth: String = "1280",
+    val inputHeight: String = "720",
+    val inputDpi: String = "320"
 )
