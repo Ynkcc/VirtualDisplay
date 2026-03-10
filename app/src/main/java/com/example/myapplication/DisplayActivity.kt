@@ -10,6 +10,7 @@ import android.view.SurfaceView
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -32,8 +33,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.myapplication.ui.theme.MyApplicationTheme
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -221,7 +222,7 @@ class DisplayActivity : ComponentActivity() {
         val id = remoteDisplayId
         if (id != null) {
             remoteDisplayId = null
-            CoroutineScope(Dispatchers.Main.immediate).launch(NonCancellable) {
+            lifecycleScope.launch(Dispatchers.Main.immediate + NonCancellable) {
                 try {
                     ShizukuDisplayBridge.setDisplaySurface(id, null)
                     Log.d(TAG, "Cleared display surface in onDestroy for #$id")
@@ -252,7 +253,7 @@ class DisplayActivity : ComponentActivity() {
         Log.v(TAG, "Injecting touch event to display #$displayId: original(${event.x}, ${event.y}) -> mapped($finalX, $finalY)")
         
         // 在协程内注入，并在注入完成后回收 MotionEvent，防止 recycled object 异常
-        CoroutineScope(Dispatchers.Main).launch {
+        lifecycleScope.launch(Dispatchers.Main.immediate) {
             try {
                 ShizukuDisplayBridge.injectInputWithDisplayId(newEvent, displayId)
             } finally {
