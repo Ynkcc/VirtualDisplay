@@ -1,0 +1,6 @@
+[submodule "scrcpy"]
+	path = scrcpy
+	url = https://github.com/Genymobile/scrcpy.git
+[submodule "Shizuku-API"]
+	path = Shizuku-API
+	url = https://github.com/RikkaApps/Shizuku-API.git
