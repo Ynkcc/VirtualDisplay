@@ -14,7 +14,7 @@ data class MainUiState(
     val isLoading: Boolean = false,
     
     // 输入相关状态
-    val inputWidth: String = "1280",
-    val inputHeight: String = "720",
-    val inputDpi: String = "320"
+    val inputWidth: String = "",
+    val inputHeight: String = "",
+    val inputDpi: String = ""
 )

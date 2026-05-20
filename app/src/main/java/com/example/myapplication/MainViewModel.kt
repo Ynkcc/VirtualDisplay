@@ -3,6 +3,8 @@ package com.example.myapplication
 import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
+import android.graphics.Point
+import android.util.DisplayMetrics
 import android.view.Display
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -76,7 +78,30 @@ class MainViewModel(
         }
     }
 
+    @Suppress("DEPRECATION")
+    private fun checkAndInitDeviceMetrics(context: Context) {
+        val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+        val defaultDisplay = dm.getDisplay(Display.DEFAULT_DISPLAY)
+        val size = Point()
+        defaultDisplay?.getRealSize(size)
+        val metrics = DisplayMetrics()
+        defaultDisplay?.getRealMetrics(metrics)
+
+        val w = size.x.toString()
+        val h = size.y.toString()
+        val dpi = metrics.densityDpi.toString()
+
+        _uiState.update { state ->
+            state.copy(
+                inputWidth = state.inputWidth.ifEmpty { w },
+                inputHeight = state.inputHeight.ifEmpty { h },
+                inputDpi = state.inputDpi.ifEmpty { dpi }
+            )
+        }
+    }
+
     fun checkShizukuStatus(context: Context) {
+        checkAndInitDeviceMetrics(context)
         if (!ShizukuDisplayBridge.isShizukuAvailable()) {
             _uiState.update { it.copy(shizukuState = ShizukuState.NotRunning) }
             return
@@ -142,6 +167,7 @@ class MainViewModel(
     }
 
     fun refreshDisplays(context: Context) {
+        checkAndInitDeviceMetrics(context)
         val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
         val managedByService = repository.managedDisplayIds.value
         
@@ -175,6 +201,20 @@ class MainViewModel(
                 .onFailure { e ->
                     _uiState.update { it.copy(isLoading = false, statusMessage = "Release failed: ${e.message}") }
                 }
+        }
+    }
+
+    fun forceRestartService(context: Context) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, statusMessage = "Force restarting service...") }
+            try {
+                ShizukuDisplayBridge.destroyService()
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Failed to destroy service", e)
+            }
+            kotlinx.coroutines.delay(1000)
+            repository.bindService(context)
+            _uiState.update { it.copy(isLoading = false, statusMessage = "Service restarted") }
         }
     }
 

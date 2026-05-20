@@ -50,8 +50,13 @@ fun VirtualDisplayScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(text = "Virtual Displays", style = MaterialTheme.typography.headlineSmall)
-                IconButton(onClick = { viewModel.refreshDisplays(context) }) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { viewModel.forceRestartService(context) }) {
+                        Text("Reset Service")
+                    }
+                    IconButton(onClick = { viewModel.refreshDisplays(context) }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    }
                 }
             }
             
