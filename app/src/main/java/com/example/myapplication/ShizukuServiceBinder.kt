@@ -26,13 +26,16 @@ class ShizukuServiceBinder(private val context: Context) {
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            Log.d(TAG, "onServiceConnected: $name")
+            Log.d(TAG, "[DIAGNOSTIC] onServiceConnected: $name")
+            binder?.linkToDeath({
+                Log.e(TAG, "[DIAGNOSTIC] Shizuku service binder died! Privilege process probably crashed or exited.")
+            }, 0)
             _service.value = IDisplayService.Stub.asInterface(binder)
             _connectionStatus.value = ConnectionStatus.CONNECTED
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            Log.d(TAG, "onServiceDisconnected: $name")
+            Log.w(TAG, "[DIAGNOSTIC] onServiceDisconnected: $name. Connection to privilege service has been lost.")
             _service.value = null
             _connectionStatus.value = ConnectionStatus.DISCONNECTED
         }
