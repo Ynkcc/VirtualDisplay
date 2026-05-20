@@ -41,6 +41,8 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
 
     private val activeDisplays = ConcurrentHashMap<Int, VirtualDisplay>()
     private val knownDisplays = ConcurrentHashMap<Int, DisplayRecord>()
+    private val activeSurfaces = ConcurrentHashMap<Int, Surface>() // 保存 Surface 强引用，避免 GC 析构
+    private var diagnosticThread: Thread? = null
 
     init {
         try {
@@ -51,6 +53,7 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
             Workarounds.apply()
             Log.d(TAG, "Workarounds applied successfully")
             reconcileKnownDisplaysWithSystem()
+            startDiagnosticThread()
         } catch (e: Throwable) {
             Log.e(TAG, "Critical error during service initialization", e)
         }
@@ -61,34 +64,49 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
     }
 
     override fun setVirtualDisplaySurface(displayId: Int, surface: Surface?) {
-        Log.d(TAG, "setVirtualDisplaySurface: displayId=$displayId, surface=$surface")
+        Log.d(TAG, "[DIAGNOSTIC] setVirtualDisplaySurface: displayId=$displayId, surface=$surface (surface.isValid=${surface?.isValid})")
         val vd = activeDisplays[displayId]
         if (vd == null) {
             if (knownDisplays.containsKey(displayId)) {
-                Log.w(TAG, "setVirtualDisplaySurface: Display $displayId is known but currently orphaned (no VirtualDisplay handle), skip")
+                Log.w(TAG, "[DIAGNOSTIC] setVirtualDisplaySurface: Display $displayId is known but currently orphaned (no VirtualDisplay handle), skip")
             } else {
-                Log.e(TAG, "setVirtualDisplaySurface: Display $displayId not found in registry")
+                Log.e(TAG, "[DIAGNOSTIC] setVirtualDisplaySurface: Display $displayId not found in registry")
             }
             return
         }
         val safeSurface = if (surface != null && !surface.isValid) {
-            Log.w(TAG, "setVirtualDisplaySurface: received invalid Surface for displayId=$displayId, falling back to null")
+            Log.w(TAG, "[DIAGNOSTIC] setVirtualDisplaySurface: received invalid Surface for displayId=$displayId, falling back to null")
             null
         } else {
             surface
         }
         try {
             vd.surface = safeSurface
+            if (safeSurface != null) {
+                activeSurfaces[displayId] = safeSurface
+                // 解决 Android 15 投屏黑屏问题：点亮虚拟显示器
+                try {
+                    val dm = ServiceManager.getDisplayManager()
+                    val success = dm.requestDisplayPower(displayId, true)
+                    Log.d(TAG, "[DIAGNOSTIC] requestDisplayPower for displayId=$displayId returned: $success")
+                } catch (powerEx: Throwable) {
+                    Log.w(TAG, "[DIAGNOSTIC] Failed to requestDisplayPower: ${powerEx.message}")
+                }
+            } else {
+                activeSurfaces.remove(displayId)
+            }
             knownDisplays[displayId]?.apply {
                 isOrphan = false
                 lastSeenAtMs = System.currentTimeMillis()
             }
+            Log.d(TAG, "[DIAGNOSTIC] setVirtualDisplaySurface succeeded for displayId=$displayId")
         } catch (e: Exception) {
-            Log.e(TAG, "setVirtualDisplaySurface failed for displayId=$displayId", e)
+            Log.e(TAG, "[DIAGNOSTIC] setVirtualDisplaySurface failed for displayId=$displayId", e)
             try {
                 vd.surface = null
             } catch (_: Exception) {
             }
+            activeSurfaces.remove(displayId)
         }
     }
 
@@ -106,12 +124,16 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
             flags = flags,
             vd = vd,
         )
+        if (surface != null) {
+            activeSurfaces[displayId] = surface
+        }
         Log.d(TAG, "Created virtual display: id=$displayId")
         return displayId
     }
 
     override fun releaseVirtualDisplay(displayId: Int) {
         Log.d(TAG, "releaseVirtualDisplay: displayId=$displayId")
+        activeSurfaces.remove(displayId)
         val vd = activeDisplays.remove(displayId)
         if (vd != null) {
             try {
@@ -166,9 +188,11 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
     }
 
     override fun injectInputEventWithDisplayId(event: InputEvent, displayId: Int, mode: Int): Boolean {
-        Log.v(TAG, "injectInputEventWithDisplayId: displayId=$displayId, mode=$mode, event=$event")
+        Log.d(TAG, "injectInputEventWithDisplayId: displayId=$displayId, mode=$mode, event=$event")
         return try {
-            Device.injectEvent(event, displayId, mode)
+            val result = Device.injectEvent(event, displayId, mode)
+            Log.d(TAG, "Device.injectEvent returned: $result")
+            result
         } catch (e: Exception) {
             Log.e(TAG, "Failed to inject input event with displayId", e)
             false
@@ -196,6 +220,8 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
 
     override fun destroy() {
         Log.d(TAG, "DisplayUserService destroy: releasing ${activeDisplays.size} displays")
+        diagnosticThread?.interrupt()
+        activeSurfaces.clear()
         activeDisplays.values.forEach { vd ->
             try {
                 vd.surface = null
@@ -245,6 +271,7 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
 
         val removed = knownDisplays.keys.filter { it !in systemIds }
         removed.forEach {
+            Log.w(TAG, "[DIAGNOSTIC] Display $it removed from system displays during reconciliation.")
             knownDisplays.remove(it)
             activeDisplays.remove(it)
         }
@@ -253,7 +280,11 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
             val existing = knownDisplays[display.displayId]
             if (existing != null) {
                 existing.lastSeenAtMs = now
+                val wasOrphan = existing.isOrphan
                 existing.isOrphan = activeDisplays[display.displayId] == null
+                if (wasOrphan != existing.isOrphan) {
+                    Log.w(TAG, "[DIAGNOSTIC] Display ${display.displayId} orphan state changed: wasOrphan=$wasOrphan, isOrphan=${existing.isOrphan}")
+                }
             } else if (isLikelyManagedDisplay(display)) {
                 knownDisplays[display.displayId] = DisplayRecord(
                     displayId = display.displayId,
@@ -266,7 +297,7 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
                     lastSeenAtMs = now,
                     isOrphan = true,
                 )
-                Log.w(TAG, "Discovered orphan display: id=${display.displayId}, name=${display.name}")
+                Log.w(TAG, "[DIAGNOSTIC] Discovered orphan display: id=${display.displayId}, name=${display.name}")
             }
         }
     }
@@ -299,6 +330,42 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
         }.getOrElse {
             Log.e(TAG, "bestEffortReleaseOrphan failed", it)
             false
+        }
+    }
+
+    private fun startDiagnosticThread() {
+        diagnosticThread = Thread {
+            Log.d(TAG, "[DIAGNOSTIC_SERVICE] Diagnostic thread started")
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    Thread.sleep(2000)
+                    activeDisplays.forEach { (id, vd) ->
+                        val display = vd.display
+                        val surface = vd.surface
+                        Log.d(TAG, "[DIAGNOSTIC_SERVICE] Display #$id: name=${display.name}, isValid=${display.isValid}, state=${display.state} (${displayStateToString(display.state)}), surface=$surface, surface.isValid=${surface?.isValid == true}")
+                    }
+                } catch (e: InterruptedException) {
+                    break
+                } catch (e: Exception) {
+                    Log.e(TAG, "[DIAGNOSTIC_SERVICE] Error in diagnostic thread", e)
+                }
+            }
+            Log.d(TAG, "[DIAGNOSTIC_SERVICE] Diagnostic thread stopped")
+        }.apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun displayStateToString(state: Int): String {
+        return when (state) {
+            Display.STATE_UNKNOWN -> "STATE_UNKNOWN"
+            Display.STATE_OFF -> "STATE_OFF"
+            Display.STATE_ON -> "STATE_ON"
+            Display.STATE_DOZE -> "STATE_DOZE"
+            Display.STATE_DOZE_SUSPEND -> "STATE_DOZE_SUSPEND"
+            Display.STATE_VR -> "STATE_VR"
+            else -> "UNKNOWN_VAL(${state})"
         }
     }
 }
