@@ -73,4 +73,16 @@ interface IDisplayService {
      * 用于区分"孤儿显示器"（系统中存在但本 service 实例不持有句柄）。
      */
     int[] getActiveDisplayIds();
+
+    /**
+     * 控制物理主屏幕开/关（熄屏但保持系统可用，模拟 scrcpy --turn-screen-off）。
+     * @param on true=亮屏, false=熄屏
+     * @return true=操作成功
+     */
+    boolean setPhysicalScreenOn(boolean on);
+
+    /**
+     * 重新调整指定虚拟显示器的物理尺寸和 DPI。
+     */
+    void resizeVirtualDisplay(int displayId, int width, int height, int dpi);
 }

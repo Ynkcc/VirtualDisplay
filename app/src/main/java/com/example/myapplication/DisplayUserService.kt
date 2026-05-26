@@ -15,6 +15,10 @@ import com.genymobile.scrcpy.device.Device
 import com.genymobile.scrcpy.wrappers.ServiceManager
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 import java.util.concurrent.ConcurrentHashMap
+import android.media.ImageReader
+import android.graphics.PixelFormat
+import android.os.HandlerThread
+import android.os.Handler
 
 class DisplayUserService @Keep constructor(private val context: Context) : IDisplayService.Stub() {
 
@@ -28,6 +32,8 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
         val createdAtMs: Long,
         var lastSeenAtMs: Long,
         var isOrphan: Boolean,
+        val imageReader: ImageReader? = null,
+        val handlerThread: HandlerThread? = null
     )
 
     companion object {
@@ -74,16 +80,16 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
             }
             return
         }
-        val safeSurface = if (surface != null && !surface.isValid) {
-            Log.w(TAG, "[DIAGNOSTIC] setVirtualDisplaySurface: received invalid Surface for displayId=$displayId, falling back to null")
-            null
+        val record = knownDisplays[displayId]
+        val targetSurface = if (surface == null || !surface.isValid) {
+            record?.imageReader?.surface
         } else {
             surface
         }
         try {
-            vd.surface = safeSurface
-            if (safeSurface != null) {
-                activeSurfaces[displayId] = safeSurface
+            vd.surface = targetSurface
+            if (targetSurface != null) {
+                activeSurfaces[displayId] = targetSurface
                 // 解决 Android 15 投屏黑屏问题：点亮虚拟显示器
                 try {
                     val dm = ServiceManager.getDisplayManager()
@@ -103,17 +109,40 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
         } catch (e: Exception) {
             Log.e(TAG, "[DIAGNOSTIC] setVirtualDisplaySurface failed for displayId=$displayId", e)
             try {
-                vd.surface = null
+                val fallback = record?.imageReader?.surface
+                vd.surface = fallback
+                if (fallback != null) {
+                    activeSurfaces[displayId] = fallback
+                } else {
+                    activeSurfaces.remove(displayId)
+                }
             } catch (_: Exception) {
             }
-            activeSurfaces.remove(displayId)
         }
     }
 
     override fun createVirtualDisplay(name: String?, width: Int, height: Int, dpi: Int, surface: Surface?, flags: Int): Int {
         Log.d(TAG, "createVirtualDisplay: name=$name, size=${width}x$height, dpi=$dpi, flags=0x${Integer.toHexString(flags)}")
         val displayManager = ServiceManager.getDisplayManager()
-        val vd = displayManager.createNewVirtualDisplay(name ?: "vd", width, height, dpi, surface, flags)
+        var reader: ImageReader? = null
+        var thread: HandlerThread? = null
+        val resolvedSurface = if (surface == null) {
+            thread = HandlerThread("VDReader-$name").apply { start() }
+            val handler = Handler(thread.looper)
+            reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+            reader.setOnImageAvailableListener({ r ->
+                try {
+                    val img = r?.acquireLatestImage()
+                    img?.close()
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Error acquiring/closing image", e)
+                }
+            }, handler)
+            reader.surface
+        } else {
+            surface
+        }
+        val vd = displayManager.createNewVirtualDisplay(name ?: "vd", width, height, dpi, resolvedSurface, flags)
         val displayId = vd.display.displayId
         registerDisplay(
             displayId = displayId,
@@ -123,9 +152,11 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
             dpi = dpi,
             flags = flags,
             vd = vd,
+            imageReader = reader,
+            handlerThread = thread
         )
-        if (surface != null) {
-            activeSurfaces[displayId] = surface
+        if (resolvedSurface != null) {
+            activeSurfaces[displayId] = resolvedSurface
         }
         Log.d(TAG, "Created virtual display: id=$displayId")
         return displayId
@@ -135,6 +166,13 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
         Log.d(TAG, "releaseVirtualDisplay: displayId=$displayId")
         activeSurfaces.remove(displayId)
         val vd = activeDisplays.remove(displayId)
+        val record = knownDisplays.remove(displayId)
+        try {
+            record?.imageReader?.close()
+            record?.handlerThread?.quitSafely()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing ImageReader/HandlerThread", e)
+        }
         if (vd != null) {
             try {
                 vd.surface = null
@@ -142,7 +180,6 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
             }
             try {
                 vd.release()
-                knownDisplays.remove(displayId)
                 Log.d(TAG, "Display $displayId released successfully")
             } catch (e: Exception) {
                 Log.e(TAG, "releaseVirtualDisplay failed for active handle: displayId=$displayId", e)
@@ -218,10 +255,48 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
         return ids
     }
 
+    override fun setPhysicalScreenOn(on: Boolean): Boolean {
+        Log.d(TAG, "setPhysicalScreenOn: on=$on")
+        return try {
+            val result = Device.setDisplayPower(Display.DEFAULT_DISPLAY, on)
+            Log.d(TAG, "setPhysicalScreenOn Device.setDisplayPower returned: $result")
+            result
+        } catch (e: Throwable) {
+            Log.e(TAG, "setPhysicalScreenOn failed", e)
+            false
+        }
+    }
+
+    override fun resizeVirtualDisplay(displayId: Int, width: Int, height: Int, dpi: Int) {
+        Log.d(TAG, "resizeVirtualDisplay: displayId=$displayId, size=${width}x$height, dpi=$dpi")
+        val vd = activeDisplays[displayId]
+        if (vd == null) {
+            Log.e(TAG, "resizeVirtualDisplay failed: VirtualDisplay #$displayId not found")
+            return
+        }
+        try {
+            vd.resize(width, height, dpi)
+            knownDisplays[displayId]?.let { old ->
+                knownDisplays[displayId] = old.copy(width = width, height = height, dpi = dpi)
+            }
+            Log.d(TAG, "resizeVirtualDisplay succeeded for displayId=$displayId")
+        } catch (e: Exception) {
+            Log.e(TAG, "resizeVirtualDisplay failed for displayId=$displayId", e)
+        }
+    }
+
     override fun destroy() {
         Log.d(TAG, "DisplayUserService destroy: releasing ${activeDisplays.size} displays")
         diagnosticThread?.interrupt()
         activeSurfaces.clear()
+        knownDisplays.values.forEach { record ->
+            try {
+                record.imageReader?.close()
+                record.handlerThread?.quitSafely()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error cleaning up imageReader/handlerThread during destroy", e)
+            }
+        }
         activeDisplays.values.forEach { vd ->
             try {
                 vd.surface = null
@@ -249,6 +324,8 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
         dpi: Int,
         flags: Int,
         vd: VirtualDisplay,
+        imageReader: ImageReader? = null,
+        handlerThread: HandlerThread? = null
     ) {
         activeDisplays[displayId] = vd
         knownDisplays[displayId] = DisplayRecord(
@@ -261,6 +338,8 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
             createdAtMs = System.currentTimeMillis(),
             lastSeenAtMs = System.currentTimeMillis(),
             isOrphan = false,
+            imageReader = imageReader,
+            handlerThread = handlerThread
         )
     }
 
