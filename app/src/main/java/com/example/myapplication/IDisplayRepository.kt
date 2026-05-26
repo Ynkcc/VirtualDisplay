@@ -75,10 +75,7 @@ interface IDisplayRepository {
      */
     suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean>
 
-    /**
-     * 控制物理屏开/关 (挂起函数)
-     */
-    suspend fun setPhysicalScreenOn(on: Boolean): Result<Boolean>
+
 
     /**
      * 判断 Shizuku 是否可用

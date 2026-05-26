@@ -255,17 +255,7 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
         return ids
     }
 
-    override fun setPhysicalScreenOn(on: Boolean): Boolean {
-        Log.d(TAG, "setPhysicalScreenOn: on=$on")
-        return try {
-            val result = Device.setDisplayPower(Display.DEFAULT_DISPLAY, on)
-            Log.d(TAG, "setPhysicalScreenOn Device.setDisplayPower returned: $result")
-            result
-        } catch (e: Throwable) {
-            Log.e(TAG, "setPhysicalScreenOn failed", e)
-            false
-        }
-    }
+
 
     override fun resizeVirtualDisplay(displayId: Int, width: Int, height: Int, dpi: Int) {
         Log.d(TAG, "resizeVirtualDisplay: displayId=$displayId, size=${width}x$height, dpi=$dpi")

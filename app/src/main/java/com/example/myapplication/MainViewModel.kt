@@ -208,23 +208,7 @@ class MainViewModel(
         }
     }
 
-    fun togglePhysicalScreen() {
-        val targetOn = !_uiState.value.isPhysicalScreenOn
-        viewModelScope.launch {
-            repository.setPhysicalScreenOn(targetOn)
-                .onSuccess { success ->
-                    if (success) {
-                        _uiState.update { it.copy(isPhysicalScreenOn = targetOn, statusMessage = if (targetOn) "亮屏" else "熄屏") }
-                    } else {
-                        _uiState.update { it.copy(statusMessage = "屏幕控制失败（requestDisplayPower 返回 false）") }
-                    }
-                }
-                .onFailure { e ->
-                    Log.e("MainViewModel", "togglePhysicalScreen failed", e)
-                    _uiState.update { it.copy(statusMessage = "屏幕控制异常: ${e.message}") }
-                }
-        }
-    }
+
 
     override fun onCleared() {
         super.onCleared()

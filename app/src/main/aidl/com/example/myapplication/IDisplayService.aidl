@@ -74,12 +74,7 @@ interface IDisplayService {
      */
     int[] getActiveDisplayIds();
 
-    /**
-     * 控制物理主屏幕开/关（熄屏但保持系统可用，模拟 scrcpy --turn-screen-off）。
-     * @param on true=亮屏, false=熄屏
-     * @return true=操作成功
-     */
-    boolean setPhysicalScreenOn(boolean on);
+
 
     /**
      * 重新调整指定虚拟显示器的物理尺寸和 DPI。

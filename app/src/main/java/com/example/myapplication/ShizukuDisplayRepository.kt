@@ -164,12 +164,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
         }
     }
 
-    override suspend fun setPhysicalScreenOn(on: Boolean): Result<Boolean> = withContext(bridgeDispatcher) {
-        runCatching {
-            val svc = displayService ?: throw IllegalStateException("Service not connected")
-            svc.setPhysicalScreenOn(on)
-        }
-    }
+
 
     override fun isShizukuAvailable(): Boolean {
         return try { Shizuku.pingBinder() } catch (e: Throwable) { false }

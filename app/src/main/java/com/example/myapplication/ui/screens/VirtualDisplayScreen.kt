@@ -47,11 +47,6 @@ fun VirtualDisplayScreen(
             ) {
                 Text(text = "Virtual Displays", style = MaterialTheme.typography.headlineSmall)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 熄屏/亮屏按钮
-                    val isScreenOn = uiState.isPhysicalScreenOn
-                    TextButton(onClick = { viewModel.togglePhysicalScreen() }) {
-                        Text(if (isScreenOn) "熄屏" else "亮屏")
-                    }
                     TextButton(onClick = { viewModel.forceRestartService(context) }) {
                         Text("Reset Service")
                     }
