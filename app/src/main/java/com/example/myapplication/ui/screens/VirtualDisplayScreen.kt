@@ -6,7 +6,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,8 +16,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.myapplication.DisplayActivity
 import com.example.myapplication.MainViewModel
-import com.example.myapplication.models.AppInfo
-import com.example.myapplication.ui.components.AppSelectionDialog
 import com.example.myapplication.ui.components.DisplayItem
 
 import androidx.compose.foundation.text.KeyboardOptions
@@ -35,8 +32,7 @@ fun VirtualDisplayScreen(
     val orphanDisplayIds = uiState.orphanDisplayIds
     val status = uiState.statusMessage
     
-    var selectedApp by remember { mutableStateOf<AppInfo?>(null) }
-    var showAppPicker by remember { mutableStateOf(false) }
+
 
     LaunchedEffect(Unit) {
         viewModel.refreshDisplays(context)
@@ -51,6 +47,11 @@ fun VirtualDisplayScreen(
             ) {
                 Text(text = "Virtual Displays", style = MaterialTheme.typography.headlineSmall)
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 熄屏/亮屏按钮
+                    val isScreenOn = uiState.isPhysicalScreenOn
+                    TextButton(onClick = { viewModel.togglePhysicalScreen() }) {
+                        Text(if (isScreenOn) "熄屏" else "亮屏")
+                    }
                     TextButton(onClick = { viewModel.forceRestartService(context) }) {
                         Text("Reset Service")
                     }
@@ -97,24 +98,9 @@ fun VirtualDisplayScreen(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedButton(
-                    onClick = { showAppPicker = true },
-                    modifier = Modifier.weight(1.2f)
-                ) {
-                    Text(text = selectedApp?.name ?: "Select App", maxLines = 1)
-                }
-                
-                if (selectedApp != null) {
-                    IconButton(onClick = { selectedApp = null }) {
-                        Icon(Icons.Default.Close, contentDescription = "Clear Selection")
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
                 Button(
                     onClick = { viewModel.createVirtualDisplay(context) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     enabled = !uiState.isLoading
                 ) {
                     Text(text = if (uiState.isLoading) "..." else "Create")
@@ -146,26 +132,13 @@ fun VirtualDisplayScreen(
                                 }
                                 context.startActivity(intent)
                             },
-                            onDelete = { viewModel.releaseDisplay(id, context) },
-                            onLaunch = {
-                                selectedApp?.let { app ->
-                                    viewModel.launchSelectedApp(context, id, app.packageName)
-                                }
-                            }
+                            onDelete = { viewModel.releaseDisplay(id, context) }
                         )
                     }
                 }
             }
         }
 
-        if (showAppPicker) {
-            AppSelectionDialog(
-                onDismiss = { showAppPicker = false },
-                onAppSelected = {
-                    selectedApp = it
-                    showAppPicker = false
-                }
-            )
-        }
+
     }
 }

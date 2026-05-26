@@ -29,8 +29,7 @@ fun DisplayItem(
     context: Context,
     isOrphan: Boolean = false,
     onPlay: () -> Unit,
-    onDelete: () -> Unit,
-    onLaunch: () -> Unit
+    onDelete: () -> Unit
 ) {
     val displayInfo = remember(displayId) {
         val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
@@ -84,17 +83,6 @@ fun DisplayItem(
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Filled.Close, contentDescription = "Delete", tint = Color.Red.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
                 }
-                Spacer(modifier = Modifier.width(4.dp))
-                
-                OutlinedButton(
-                    onClick = onLaunch,
-                    enabled = !isOrphan,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    modifier = Modifier.height(32.dp)
-                ) {
-                    Text("Launch", fontSize = 11.sp)
-                }
-
                 Spacer(modifier = Modifier.width(4.dp))
 
                 Button(
