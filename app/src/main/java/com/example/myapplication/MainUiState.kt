@@ -16,5 +16,8 @@ data class MainUiState(
     // 输入相关状态
     val inputWidth: String = "",
     val inputHeight: String = "",
-    val inputDpi: String = ""
+    val inputDpi: String = "",
+
+    // 物理屏幕控制状态
+    val isPhysicalScreenOn: Boolean = true
 )

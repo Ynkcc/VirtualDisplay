@@ -21,9 +21,11 @@ import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 
 class MainViewModel(
-    private val repository: IDisplayRepository = ShizukuDisplayBridge
+    private val repository: IDisplayRepository,
+    context: Context
 ) : ViewModel() {
 
+    private val appContext = context.applicationContext
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
@@ -46,22 +48,10 @@ class MainViewModel(
         }
         
         viewModelScope.launch {
-            repository.managedDisplayIds.collect { managedIds ->
-                updateDisplayLists(managedIds)
+            repository.managedDisplayIds.collect { _ ->
+                refreshDisplays(appContext)
             }
         }
-    }
-
-    private fun updateDisplayLists(managedIds: Set<Int>) {
-        // 由于需要 Context 获取完整的 DisplayManager 信息，
-        // 我们可以在 init 中保存一个参考，或者在 collect 时由外部触发。
-        // 但最简单的方法是在这里直接更新 displayIds 状态，
-        // 真正的同步由 repository 触发 refreshManagedDisplays，
-        // 然后 ViewModel 这里的 collect 会被叫到。
-        _uiState.update { it.copy(
-            displayIds = managedIds.toList(),
-            statusMessage = "Displays updated: ${managedIds.size}"
-        ) }
     }
 
     fun launchSelectedApp(context: Context, displayId: Int, packageName: String) {
@@ -102,7 +92,7 @@ class MainViewModel(
 
     fun checkShizukuStatus(context: Context) {
         checkAndInitDeviceMetrics(context)
-        if (!ShizukuDisplayBridge.isShizukuAvailable()) {
+        if (!repository.isShizukuAvailable()) {
             _uiState.update { it.copy(shizukuState = ShizukuState.NotRunning) }
             return
         }
@@ -177,7 +167,7 @@ class MainViewModel(
         dm.displays.forEach { display ->
             if (display.displayId != Display.DEFAULT_DISPLAY) {
                 allIds.add(display.displayId)
-                if (managedByService.isNotEmpty() && display.displayId !in managedByService) {
+                if (repository.connectionStatus.value == ConnectionStatus.CONNECTED && display.displayId !in managedByService) {
                     orphans.add(display.displayId)
                 }
             }
@@ -208,7 +198,7 @@ class MainViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, statusMessage = "Force restarting service...") }
             try {
-                ShizukuDisplayBridge.destroyService()
+                repository.destroyService()
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Failed to destroy service", e)
             }
@@ -218,8 +208,39 @@ class MainViewModel(
         }
     }
 
+    fun togglePhysicalScreen() {
+        val targetOn = !_uiState.value.isPhysicalScreenOn
+        viewModelScope.launch {
+            repository.setPhysicalScreenOn(targetOn)
+                .onSuccess { success ->
+                    if (success) {
+                        _uiState.update { it.copy(isPhysicalScreenOn = targetOn, statusMessage = if (targetOn) "亮屏" else "熄屏") }
+                    } else {
+                        _uiState.update { it.copy(statusMessage = "屏幕控制失败（requestDisplayPower 返回 false）") }
+                    }
+                }
+                .onFailure { e ->
+                    Log.e("MainViewModel", "togglePhysicalScreen failed", e)
+                    _uiState.update { it.copy(statusMessage = "屏幕控制异常: ${e.message}") }
+                }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         Shizuku.removeRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER)
+    }
+}
+
+class MainViewModelFactory(
+    private val repository: IDisplayRepository,
+    private val context: Context
+) : androidx.lifecycle.ViewModelProvider.Factory {
+    override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return MainViewModel(repository, context) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
     }
 }

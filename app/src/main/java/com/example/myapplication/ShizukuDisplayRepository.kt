@@ -1,40 +1,41 @@
 package com.example.myapplication
 
 import android.app.ActivityOptions
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
 import android.hardware.display.DisplayManager
 import android.os.Build
-import android.os.Bundle
-import android.os.IBinder
 import android.util.Log
-import android.view.Display
 import android.view.InputEvent
 import android.view.Surface
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import rikka.shizuku.Shizuku
 
-object ShizukuDisplayBridge : IDisplayRepository {
-    private const val TAG = "ShizukuDisplayBridge"
-    const val REQUEST_CODE = 20260
+class ShizukuDisplayRepository(private val context: Context) : IDisplayRepository {
+
+    companion object {
+        private const val TAG = "ShizukuDisplayRepository"
+        const val REQUEST_CODE = 20260
+    }
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.IDLE)
     override val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
 
-    private val bridgeDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
-
     private val _managedDisplayIds = MutableStateFlow<Set<Int>>(emptySet())
     override val managedDisplayIds: StateFlow<Set<Int>> = _managedDisplayIds.asStateFlow()
 
-    @Volatile
-    private lateinit var binder: ShizukuServiceBinder
-    private var displayService: IDisplayService? = null
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val bridgeDispatcher = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     
+    private val exceptionHandler = CoroutineExceptionHandler { _, exception ->
+        Log.e(TAG, "Coroutine execution failed inside Repository", exception)
+    }
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob() + exceptionHandler)
+
+    private val binder = ShizukuServiceBinder(context.applicationContext)
+    private var displayService: IDisplayService? = null
     private var displayManager: DisplayManager? = null
+
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) {
             Log.d(TAG, "onDisplayAdded: $displayId")
@@ -49,38 +50,32 @@ object ShizukuDisplayBridge : IDisplayRepository {
         }
     }
 
-    fun initialize(context: Context) {
-        if (!::binder.isInitialized) {
-            binder = ShizukuServiceBinder(context.applicationContext)
-            
-            scope.launch {
-                binder.connectionStatus.collect { status ->
-                    Log.d(TAG, "[DIAGNOSTIC] ShizukuDisplayBridge connection status updated: $status")
-                    _connectionStatus.value = status
-                    if (status == ConnectionStatus.CONNECTED) {
-                        refreshManagedDisplays()
-                    } else if (status == ConnectionStatus.DISCONNECTED || status == ConnectionStatus.IDLE) {
-                        _managedDisplayIds.value = emptySet()
-                    }
-                }
-            }
-
-            scope.launch {
-                binder.service.collect { service ->
-                    displayService = service
+    init {
+        scope.launch {
+            binder.connectionStatus.collect { status ->
+                Log.d(TAG, "[DIAGNOSTIC] Shizuku connection status updated: $status")
+                _connectionStatus.value = status
+                if (status == ConnectionStatus.CONNECTED) {
+                    refreshManagedDisplays()
+                } else if (status == ConnectionStatus.DISCONNECTED || status == ConnectionStatus.IDLE) {
+                    _managedDisplayIds.value = emptySet()
                 }
             }
         }
-        
-        if (displayManager == null) {
-            displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-            displayManager?.registerDisplayListener(displayListener, null)
-            Log.d(TAG, "DisplayListener registered in initialize")
+
+        scope.launch {
+            binder.service.collect { service ->
+                displayService = service
+            }
         }
     }
 
     override fun bindService(context: Context) {
-        initialize(context)
+        if (displayManager == null) {
+            displayManager = context.applicationContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            displayManager?.registerDisplayListener(displayListener, null)
+            Log.d(TAG, "DisplayListener registered in bindService")
+        }
         if (!isShizukuAvailable()) {
             _connectionStatus.value = ConnectionStatus.ERROR
             return
@@ -90,15 +85,8 @@ object ShizukuDisplayBridge : IDisplayRepository {
 
     override fun unbindService() {
         displayManager?.unregisterDisplayListener(displayListener)
-        displayManager = null // 设置为 null，以便下次 initialize 时重新注册
-        if (::binder.isInitialized) {
-            try {
-                displayService?.destroy()
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to destroy displayService during unbind", e)
-            }
-            binder.unbind()
-        }
+        displayManager = null
+        binder.unbind()
     }
 
     private fun refreshManagedDisplays() {
@@ -138,6 +126,13 @@ object ShizukuDisplayBridge : IDisplayRepository {
         }
     }
 
+    override suspend fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Result<Unit> = withContext(bridgeDispatcher) {
+        runCatching {
+            val svc = displayService ?: throw IllegalStateException("Service not connected")
+            svc.resizeVirtualDisplay(displayId, width, height, dpi)
+        }
+    }
+
     override suspend fun launchApp(packageName: String, displayId: Int): Result<Int> = withContext(bridgeDispatcher) {
         runCatching {
             val svc = displayService ?: throw IllegalStateException("Service not connected")
@@ -154,13 +149,6 @@ object ShizukuDisplayBridge : IDisplayRepository {
             svc.startActivity(intent, options)
         }
     }
-    
-    suspend fun startActivity(intent: Intent, options: Bundle?): Result<Int> = withContext(bridgeDispatcher) {
-        runCatching {
-            val svc = displayService ?: throw IllegalStateException("Service not connected")
-            svc.startActivity(intent, options)
-        }
-    }
 
     override suspend fun injectInput(event: InputEvent): Result<Boolean> = withContext(bridgeDispatcher) {
         runCatching {
@@ -169,32 +157,25 @@ object ShizukuDisplayBridge : IDisplayRepository {
         }
     }
 
-    /**
-     * 在 Shizuku 特权进程中构造并注入 KeyEvent，displayId 在特权侧设置——复用 scrcpy 方案。
-     */
-    suspend fun injectKeyEvent(action: Int, keyCode: Int, displayId: Int, repeat: Int = 0, metaState: Int = 0): Result<Boolean> = withContext(bridgeDispatcher) {
-        runCatching {
-            val svc = displayService ?: throw IllegalStateException("Service not connected")
-            svc.injectKeyEvent(action, keyCode, repeat, metaState, displayId, 0)
-        }
-    }
-
-    /**
-     * 注入任意 InputEvent（含 MotionEvent），在 Shizuku 特权侧调用 setDisplayId——复用 scrcpy 方案。
-     * app 进程只负责坐标缩放，不再反射设置 displayId。
-     */
-    suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean> = withContext(bridgeDispatcher) {
+    override suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean> = withContext(bridgeDispatcher) {
         runCatching {
             val svc = displayService ?: throw IllegalStateException("Service not connected")
             svc.injectInputEventWithDisplayId(event, displayId, 0)
         }
     }
 
-    fun isShizukuAvailable(): Boolean {
+    override suspend fun setPhysicalScreenOn(on: Boolean): Result<Boolean> = withContext(bridgeDispatcher) {
+        runCatching {
+            val svc = displayService ?: throw IllegalStateException("Service not connected")
+            svc.setPhysicalScreenOn(on)
+        }
+    }
+
+    override fun isShizukuAvailable(): Boolean {
         return try { Shizuku.pingBinder() } catch (e: Throwable) { false }
     }
 
-    fun destroyService() {
+    override fun destroyService() {
         try {
             displayService?.destroy()
         } catch (e: Exception) {
@@ -203,18 +184,8 @@ object ShizukuDisplayBridge : IDisplayRepository {
     }
 
     private fun buildDefaultFlags(): Int {
-        // VIRTUAL_DISPLAY_FLAG_PUBLIC = 1 << 0
-        // VIRTUAL_DISPLAY_FLAG_PRESENTATION = 1 << 1
-        // VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY = 1 << 3
-        // VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT = 1 << 6
-        // VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL = 1 << 7
-        // VIRTUAL_DISPLAY_FLAG_TRUSTED = 1 << 8 (关键：允许输入注入)
-        // VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP = 1 << 9
-        
         var flags = 1 or 2 or 8 or 64 or 128 or 256 or 512
         if (Build.VERSION.SDK_INT >= 33) {
-            // VIRTUAL_DISPLAY_FLAG_ALWAYS_UNLOCKED = 1 << 10
-            // VIRTUAL_DISPLAY_FLAG_TOUCH_FEEDBACK_DISABLED = 1 << 11
             flags = flags or 1024 or 2048 or 4096 or 8192
             if (Build.VERSION.SDK_INT >= 34) {
                 flags = flags or 16384 or 32768

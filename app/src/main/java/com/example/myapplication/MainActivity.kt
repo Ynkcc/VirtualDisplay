@@ -28,7 +28,9 @@ import rikka.sui.Sui
 
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: MainViewModel by viewModels()
+    private val viewModel: MainViewModel by viewModels {
+        MainViewModelFactory((application as MyApplication).displayRepository, applicationContext)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,9 +45,10 @@ class MainActivity : ComponentActivity() {
 
         viewModel.checkShizukuStatus(this)
 
+        val repository = (application as MyApplication).displayRepository
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                ShizukuDisplayBridge.bindService(this@MainActivity)
+                repository.bindService(this@MainActivity)
             }
         }
 
@@ -71,7 +74,7 @@ class MainActivity : ComponentActivity() {
                                     onRetry = { viewModel.checkShizukuStatus(this@MainActivity) },
                                     onRequestPermission = {
                                         try {
-                                            Shizuku.requestPermission(ShizukuDisplayBridge.REQUEST_CODE)
+                                            Shizuku.requestPermission(ShizukuDisplayRepository.REQUEST_CODE)
                                         } catch (e: Exception) {
                                             Log.e("MainActivity", "Failed to request permission", e)
                                         }
@@ -94,6 +97,6 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d("MainActivity", "onDestroy: unbinding service")
-        ShizukuDisplayBridge.unbindService()
+        (application as MyApplication).displayRepository.unbindService()
     }
 }

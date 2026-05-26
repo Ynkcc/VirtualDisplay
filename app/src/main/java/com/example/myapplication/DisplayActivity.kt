@@ -36,6 +36,7 @@ class DisplayActivity : ComponentActivity() {
     private var vdHeight = 0
     private var activeDisplaySpec: DisplaySpec? = null
     private var touchGestureStarted = false
+    private var isResizing = false
 
     // 辅助证明黑屏问题的诊断变量
     private var lastFrameTimeMs = 0L
@@ -46,6 +47,9 @@ class DisplayActivity : ComponentActivity() {
 
     private lateinit var rootLayout: FrameLayout
     private lateinit var textureView: TextureView
+    private val repository: IDisplayRepository by lazy {
+        (application as MyApplication).displayRepository
+    }
 
     private val displayListener = object : android.hardware.display.DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) {
@@ -60,11 +64,18 @@ class DisplayActivity : ComponentActivity() {
         }
         override fun onDisplayChanged(displayId: Int) {
             Log.d(TAG, "[DIAGNOSTIC] onDisplayChanged: $displayId")
-            if (displayId == remoteDisplayId) updateDisplayInfo(displayId)
+            if (displayId == remoteDisplayId) {
+                // DisplayListener 可能在非主线程回调，View 操作须切到主线程
+                rootLayout.post { updateDisplayInfo(displayId) }
+            }
         }
     }
 
     private fun updateDisplayInfo(displayId: Int) {
+        if (isResizing) {
+            Log.d(TAG, "updateDisplayInfo: Ignore because isResizing = true")
+            return
+        }
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.getDisplay(displayId)?.let { display ->
             val size = Point()
@@ -74,7 +85,57 @@ class DisplayActivity : ComponentActivity() {
                 Log.d(TAG, "Virtual Display #$displayId Resized: ${size.x}x${size.y}")
                 vdWidth = size.x
                 vdHeight = size.y
+                val targetOrientation = if (vdWidth > vdHeight) {
+                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                }
+                if (requestedOrientation != targetOrientation) {
+                    requestedOrientation = targetOrientation
+                }
+                textureView.surfaceTexture?.let { texture ->
+                    isResizing = true
+                    texture.setDefaultBufferSize(vdWidth, vdHeight)
+                    val oldSurface = activeSurface
+                    val newSurface = Surface(texture)
+                    activeSurface = newSurface
+                    lifecycleScope.launch(Dispatchers.Main.immediate) {
+                        try {
+                            Log.d(TAG, "Re-sizing virtual display and re-setting surface due to size change: displayId=$displayId, size=${vdWidth}x${vdHeight}")
+                            val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
+                            val dpi = dm.getDisplay(displayId)?.let { d ->
+                                val metrics = android.util.DisplayMetrics()
+                                @Suppress("DEPRECATION")
+                                d.getMetrics(metrics)
+                                metrics.densityDpi
+                            } ?: android.util.DisplayMetrics.DENSITY_DEFAULT
+                            
+                            repository.resizeDisplay(displayId, vdWidth, vdHeight, dpi)
+                            repository.setDisplaySurface(displayId, newSurface)
+                            oldSurface?.release()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error during resize and re-bind surface", e)
+                        } finally {
+                            kotlinx.coroutines.delay(300)
+                            isResizing = false
+                            checkLatestDisplayInfo(displayId)
+                        }
+                    }
+                }
                 updateSurfaceLayout()
+            }
+        }
+    }
+
+    private fun checkLatestDisplayInfo(displayId: Int) {
+        val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
+        dm.getDisplay(displayId)?.let { display ->
+            val size = Point()
+            @Suppress("DEPRECATION")
+            display.getRealSize(size)
+            if (vdWidth != size.x || vdHeight != size.y) {
+                Log.d(TAG, "checkLatestDisplayInfo: detect size difference after resize finished, triggering update")
+                updateDisplayInfo(displayId)
             }
         }
     }
@@ -89,18 +150,16 @@ class DisplayActivity : ComponentActivity() {
         enterFullscreen()
         setupContentView(displayId)
 
-        ShizukuDisplayBridge.bindService(this)
+        repository.bindService(this)
 
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.registerDisplayListener(displayListener, null)
         updateDisplayInfo(displayId)
 
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-
         // 监听连接状态以做诊断
         lifecycleScope.launch {
-            ShizukuDisplayBridge.connectionStatus.collect { status ->
-                Log.d(TAG, "[DIAGNOSTIC] ShizukuDisplayBridge connection status updated: $status")
+            repository.connectionStatus.collect { status ->
+                Log.d(TAG, "[DIAGNOSTIC] Shizuku connection status updated: $status")
             }
         }
     }
@@ -121,7 +180,7 @@ class DisplayActivity : ComponentActivity() {
         dm.unregisterDisplayListener(displayListener)
         remoteDisplayId?.let { id ->
             lifecycleScope.launch(Dispatchers.Main.immediate + NonCancellable) {
-                ShizukuDisplayBridge.setDisplaySurface(id, null)
+                repository.setDisplaySurface(id, null)
             }
         }
     }
@@ -149,6 +208,26 @@ class DisplayActivity : ComponentActivity() {
                         if (!isBlackScreenWarningLogged) {
                             Log.e(TAG, "[DIAGNOSTIC] Black screen/Freeze detected! No frame updates on TextureView for $elapsed ms. Total frames rendered so far: $totalFrameCount. Active surface is valid: ${surface?.isValid == true}")
                             isBlackScreenWarningLogged = true
+                            
+                            // 自动恢复：重设 Surface 绑定以唤醒系统渲染
+                            lifecycleScope.launch(Dispatchers.Main) {
+                                remoteDisplayId?.let { id ->
+                                    val currentSurface = activeSurface
+                                    if (currentSurface != null && currentSurface.isValid) {
+                                        Log.i(TAG, "[DIAGNOSTIC] Attempting auto-recovery: resetting surface binding for displayId=$id")
+                                        try {
+                                            repository.setDisplaySurface(id, null)
+                                            kotlinx.coroutines.delay(100)
+                                            if (activeSurface == currentSurface && currentSurface.isValid) {
+                                                repository.setDisplaySurface(id, currentSurface)
+                                                Log.i(TAG, "[DIAGNOSTIC] Auto-recovery request sent successfully.")
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "[DIAGNOSTIC] Auto-recovery failed", e)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     } else {
                         // 视频流正常更新，此时抽样检测渲染内容是否全黑
@@ -240,7 +319,7 @@ class DisplayActivity : ComponentActivity() {
                     isBlackScreenWarningLogged = false
                     lifecycleScope.launch(Dispatchers.Main.immediate) {
                         Log.d(TAG, "Calling setDisplaySurface: displayId=$displayId")
-                        val result = ShizukuDisplayBridge.setDisplaySurface(displayId, newSurface)
+                        val result = repository.setDisplaySurface(displayId, newSurface)
                         Log.d(TAG, "[DIAGNOSTIC] setDisplaySurface result: $result")
                         result.exceptionOrNull()?.let { error ->
                             Log.e(TAG, "[DIAGNOSTIC] Failed to set display surface", error)
@@ -256,10 +335,12 @@ class DisplayActivity : ComponentActivity() {
 
                 override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
                     Log.d(TAG, "[DIAGNOSTIC] onSurfaceTextureDestroyed")
+                    val oldSurface = activeSurface
                     activeSurface = null
                     lifecycleScope.launch(Dispatchers.Main.immediate) {
-                        val result = ShizukuDisplayBridge.setDisplaySurface(displayId, null)
+                        val result = repository.setDisplaySurface(displayId, null)
                         Log.d(TAG, "Cleared display surface, result=$result")
+                        oldSurface?.release()
                     }
                     return true
                 }
@@ -451,7 +532,7 @@ class DisplayActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.Main.immediate) {
             try {
                 Log.d(TAG, "injectTouchEvent: action=${event.action}, deviceId=${event.deviceId}, source=${event.source}, targetDisplayId=$displayId")
-                val result = ShizukuDisplayBridge.injectInputWithDisplayId(event, displayId)
+                val result = repository.injectInputWithDisplayId(event, displayId)
                 Log.d(TAG, "injectTouchEvent result: $result")
                 if (result.isFailure || result.getOrDefault(false).not()) {
                     Log.e(TAG, result.exceptionOrNull()?.message ?: "触摸事件注入失败")
@@ -473,50 +554,40 @@ class DisplayActivity : ComponentActivity() {
             return
         }
 
-        // 强行约束底层 Texture 的真实渲染分辨率，防止图像本身畸变
+        // 设置 buffer 尺寸与虚拟屏当前逻辑分辨率一致
         textureView.surfaceTexture?.setDefaultBufferSize(vdWidth, vdHeight)
 
         val viewW = rootLayout.width.takeIf { it > 0 }?.toFloat() ?: return
         val viewH = rootLayout.height.takeIf { it > 0 }?.toFloat() ?: return
 
-        val rotated = sourceW > sourceH
-        val visualSourceWidth = if (rotated) sourceH else sourceW
-        val visualSourceHeight = if (rotated) sourceW else sourceH
-
-        val scale = minOf(viewW / visualSourceWidth, viewH / visualSourceHeight)
-
         // ---------------------------------------------------------
-        // 核心修复：通过 Texture Matrix 直接操作图像渲染的旋转与缩放
+        // 虚拟屏内应用自行处理旋转：getRealSize 已返回旋转后的实际宽高。
+        // 我们只需做 fit-center 缩放，不需要额外旋转。
+        // TextureView 默认将 buffer 拉伸至 view 全屏，先抵消拉伸再等比缩放。
         // ---------------------------------------------------------
+        val scale = minOf(viewW / sourceW, viewH / sourceH)
+
         val textureMatrix = Matrix()
-        // TextureView 默认会做全屏拉伸，所以我们先将被拉伸的坐标原点移到中心
         textureMatrix.postTranslate(-viewW / 2f, -viewH / 2f)
-        // 抵消拉伸形变，让画面在视觉上恢复回纯正的 sourceW x sourceH 比例
-        textureMatrix.postScale(sourceW / viewW, sourceH / viewH)
-        // 执行物理方向上的旋转 (此时才真正使得 1280x720 翻转)
-        if (rotated) textureMatrix.postRotate(90f)
-        // 放大/缩小画面以等比适配屏幕 (Fit-Center)
-        textureMatrix.postScale(scale, scale)
-        // 将原点从中心移回左上角
+        textureMatrix.postScale(sourceW / viewW, sourceH / viewH) // 抵消全屏拉伸
+        textureMatrix.postScale(scale, scale)                      // fit-center 缩放
         textureMatrix.postTranslate(viewW / 2f, viewH / 2f)
 
         textureView.setTransform(textureMatrix)
 
-
         // ---------------------------------------------------------
-        // 建立触摸映射的逆向矩阵 (数学过程和上方完全对齐)
+        // 触摸坐标映射：将屏幕坐标逆映射回虚拟屏坐标空间
         // ---------------------------------------------------------
         val touchMatrix = Matrix()
         touchMatrix.postTranslate(-sourceW / 2f, -sourceH / 2f)
-        if (rotated) touchMatrix.postRotate(90f)
         touchMatrix.postScale(scale, scale)
         touchMatrix.postTranslate(viewW / 2f, viewH / 2f)
 
         val inverseMatrix = Matrix()
         touchMatrix.invert(inverseMatrix)
 
-        val targetWidth = visualSourceWidth * scale
-        val targetHeight = visualSourceHeight * scale
+        val targetWidth = sourceW * scale
+        val targetHeight = sourceH * scale
 
         activeDisplaySpec = DisplaySpec(
             sourceWidth = sourceW,
