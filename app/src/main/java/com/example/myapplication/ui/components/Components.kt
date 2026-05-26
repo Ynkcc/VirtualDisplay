@@ -44,7 +44,7 @@ fun DisplayPreview(
     var previewKey by remember { mutableStateOf(0) }
 
     // 监听生命周期，在 ON_RESUME 时递增 key，强制重新创建 TextureView 实例，彻底清除由于生命周期切换、系统布局通道等引发的缓存及 Buffer 尺寸脏状态
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, displayId) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 previewKey++
@@ -53,6 +53,9 @@ fun DisplayPreview(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            CoroutineScope(Dispatchers.Main).launch {
+                repository.setDisplaySurface(displayId, null)
+            }
         }
     }
 
@@ -75,9 +78,6 @@ fun DisplayPreview(
                         }
 
                         override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
-                            CoroutineScope(Dispatchers.Main).launch {
-                                repository.setDisplaySurface(displayId, null)
-                            }
                             return true
                         }
 

@@ -178,11 +178,6 @@ class DisplayActivity : ComponentActivity() {
         super.onDestroy()
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.unregisterDisplayListener(displayListener)
-        remoteDisplayId?.let { id ->
-            lifecycleScope.launch(Dispatchers.Main.immediate + NonCancellable) {
-                repository.setDisplaySurface(id, null)
-            }
-        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -337,10 +332,10 @@ class DisplayActivity : ComponentActivity() {
                     Log.d(TAG, "[DIAGNOSTIC] onSurfaceTextureDestroyed")
                     val oldSurface = activeSurface
                     activeSurface = null
-                    lifecycleScope.launch(Dispatchers.Main.immediate) {
-                        val result = repository.setDisplaySurface(displayId, null)
-                        Log.d(TAG, "Cleared display surface, result=$result")
+                    if (isFinishing) {
                         oldSurface?.release()
+                    } else {
+                        Log.d(TAG, "onSurfaceTextureDestroyed: Keeping surface active because activity is not finishing")
                     }
                     return true
                 }
@@ -369,67 +364,98 @@ class DisplayActivity : ComponentActivity() {
             )
         )
 
-        // 添加悬浮可移动的退出按钮
-        val exitButton = android.widget.ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
-            imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+
+        // 优化版悬浮可拖拽的控制面板
+        val density = resources.displayMetrics.density
+        val panelWidth = (80 * density).toInt()   // 80dp 宽
+        val panelHeight = (40 * density).toInt()  // 40dp 高
+        
+        val controlPanel = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            elevation = 15f * density
+            
+            // 采用质感好的半透明磨砂黑圆角背景
             background = android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.OVAL
-                setColor(android.graphics.Color.parseColor("#80000000"))
+                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                setColor(android.graphics.Color.parseColor("#C01A1A1A")) // 半透明灰黑
+                cornerRadius = 12f * density
+                setStroke((1.5f * density).toInt(), android.graphics.Color.parseColor("#30FFFFFF")) // 微弱白色描边
             }
-            setPadding(40, 40, 40, 40)
-            elevation = 10f
             
             layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.END
+                panelWidth,
+                panelHeight,
+                Gravity.TOP or Gravity.START
             ).apply {
-                setMargins(0, 150, 50, 0)
+                leftMargin = (32 * density).toInt()
+                topMargin = (100 * density).toInt()
             }
+            
+            // 拖拽手柄（顶部小横条，向用户传达“这块区域可拖拽”的信息）
+            val handleView = android.view.View(context).apply {
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    (26 * density).toInt(),
+                    (3 * density).toInt()
+                ).apply {
+                    setMargins(0, (4 * density).toInt(), 0, (4 * density).toInt())
+                }
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                    setColor(android.graphics.Color.parseColor("#80FFFFFF"))
+                    cornerRadius = 1.5f * density
+                }
+            }
+            addView(handleView)
+            
+            // 退出按钮
+            val closeButton = android.widget.ImageView(context).apply {
+                setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+                imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    (20 * density).toInt(),
+                    (20 * density).toInt()
+                ).apply {
+                    setMargins(0, 0, 0, (4 * density).toInt())
+                }
+                scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                isClickable = true
+                isFocusable = true
+            }
+            addView(closeButton)
             
             var dX = 0f
             var dY = 0f
-            var clickTime = 0L
-            var initialX = 0f
-            var initialY = 0f
             
             setOnTouchListener { view, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         dX = view.x - event.rawX
                         dY = view.y - event.rawY
-                        initialX = event.rawX
-                        initialY = event.rawY
-                        clickTime = System.currentTimeMillis()
-                        view.animate().scaleX(1.1f).scaleY(1.1f).setDuration(100).start()
+                        view.animate().scaleX(1.05f).scaleY(1.05f).alpha(0.95f).setDuration(100).start()
                         true
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        view.animate()
-                            .x(event.rawX + dX)
-                            .y(event.rawY + dY)
-                            .setDuration(0)
-                            .start()
+                        val parent = view.parent as android.view.View
+                        val newX = (event.rawX + dX).coerceIn(0f, (parent.width - view.width).toFloat())
+                        val newY = (event.rawY + dY).coerceIn(0f, (parent.height - view.height).toFloat())
+                        view.x = newX
+                        view.y = newY
                         true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        view.animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start()
-                        val diffX = kotlin.math.abs(event.rawX - initialX)
-                        val diffY = kotlin.math.abs(event.rawY - initialY)
-                        if (event.actionMasked == MotionEvent.ACTION_UP &&
-                            System.currentTimeMillis() - clickTime < 200 &&
-                            diffX < 20 && diffY < 20
-                        ) {
-                            finish()
-                        }
+                        view.animate().scaleX(1.0f).scaleY(1.0f).alpha(1.0f).setDuration(100).start()
                         true
                     }
                     else -> false
                 }
             }
+            
+            closeButton.setOnClickListener {
+                finish()
+            }
         }
-        rootLayout.addView(exitButton)
+        rootLayout.addView(controlPanel)
 
         setContentView(rootLayout)
     }
@@ -507,7 +533,7 @@ class DisplayActivity : ComponentActivity() {
             event.buttonState,
             event.xPrecision,
             event.yPrecision,
-            event.deviceId,
+            0, // deviceId 设为 0
             event.edgeFlags,
             InputDevice.SOURCE_TOUCHSCREEN,
             event.flags,
