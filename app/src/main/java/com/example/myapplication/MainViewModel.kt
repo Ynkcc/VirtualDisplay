@@ -21,13 +21,24 @@ import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 
 class MainViewModel(
-    private val repository: IDisplayRepository,
+    val repository: IDisplayRepository,
     context: Context
 ) : ViewModel() {
 
     private val appContext = context.applicationContext
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+    private val displayListener = object : android.hardware.display.DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {
+            refreshDisplays(appContext)
+        }
+        override fun onDisplayRemoved(displayId: Int) {
+            refreshDisplays(appContext)
+        }
+        override fun onDisplayChanged(displayId: Int) {
+            refreshDisplays(appContext)
+        }
+    }
 
     private val REQUEST_PERMISSION_RESULT_LISTENER = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         val granted = grantResult == PackageManager.PERMISSION_GRANTED
@@ -39,6 +50,9 @@ class MainViewModel(
 
     init {
         Shizuku.addRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER)
+        
+        val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+        dm.registerDisplayListener(displayListener, null)
         
         // 订阅 Repository 状态
         viewModelScope.launch {
@@ -161,12 +175,22 @@ class MainViewModel(
         val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
         val managedByService = repository.managedDisplayIds.value
         
-        val allIds = mutableListOf<Int>()
+        val displaysList = mutableListOf<DisplayInfoModel>()
         val orphans = mutableListOf<Int>()
         
         dm.displays.forEach { display ->
             if (display.displayId != Display.DEFAULT_DISPLAY) {
-                allIds.add(display.displayId)
+                val size = Point()
+                @Suppress("DEPRECATION")
+                display.getRealSize(size)
+                displaysList.add(
+                    DisplayInfoModel(
+                        id = display.displayId,
+                        name = display.name,
+                        width = size.x,
+                        height = size.y
+                    )
+                )
                 if (repository.connectionStatus.value == ConnectionStatus.CONNECTED && display.displayId !in managedByService) {
                     orphans.add(display.displayId)
                 }
@@ -174,7 +198,7 @@ class MainViewModel(
         }
         
         _uiState.update { it.copy(
-            displayIds = allIds,
+            displays = displaysList,
             orphanDisplayIds = orphans,
             statusMessage = "Displays refreshed"
         ) }
@@ -212,6 +236,8 @@ class MainViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+        dm.unregisterDisplayListener(displayListener)
         Shizuku.removeRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER)
     }
 }

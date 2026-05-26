@@ -28,7 +28,7 @@ fun VirtualDisplayScreen(
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
-    val displayIds = uiState.displayIds
+    val displays = uiState.displays
     val orphanDisplayIds = uiState.orphanDisplayIds
     val status = uiState.statusMessage
     
@@ -104,7 +104,7 @@ fun VirtualDisplayScreen(
 
             Text(text = "Active Displays:", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 12.dp))
             
-            if (displayIds.isEmpty()) {
+            if (displays.isEmpty()) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text(text = "No non-primary displays found.", color = Color.Gray)
                 }
@@ -116,18 +116,18 @@ fun VirtualDisplayScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     contentPadding = PaddingValues(bottom = 16.dp)
                 ) {
-                    items(displayIds, key = { it }) { id ->
+                    items(displays, key = { it.id }) { displayInfo ->
                         DisplayItem(
-                            displayId = id,
-                            context = context,
-                            isOrphan = id in orphanDisplayIds,
+                            displayInfo = displayInfo,
+                            repository = viewModel.repository,
+                            isOrphan = displayInfo.id in orphanDisplayIds,
                             onPlay = {
                                 val intent = Intent(context, DisplayActivity::class.java).apply {
-                                    putExtra("display_id", id)
+                                    putExtra("display_id", displayInfo.id)
                                 }
                                 context.startActivity(intent)
                             },
-                            onDelete = { viewModel.releaseDisplay(id, context) }
+                            onDelete = { viewModel.releaseDisplay(displayInfo.id, context) }
                         )
                     }
                 }
