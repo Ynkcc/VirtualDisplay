@@ -1,10 +1,13 @@
+import java.io.File
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
 }
 
 android {
-    namespace = "com.example.myapplication"
+    namespace = "com.ynk.virtualdisplay"
     
     // Restore the specific SDK version that was being used
     compileSdk {
@@ -15,7 +18,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.myapplication"
+        applicationId = "com.ynk.virtualdisplay"
         minSdk = 29
         targetSdk = 35 // targetSdk 36 is not yet stable, 35 is recommended for now
         versionCode = 1
@@ -32,9 +35,39 @@ android {
         }
     }
 
+    val signingProperties = Properties().apply {
+        val file = rootProject.file("local.properties")
+        if (file.exists()) {
+            file.inputStream().use { load(it) }
+        }
+    }
+    val releaseStoreFile: File? = (System.getenv("RELEASE_STORE_FILE").takeIf { !it.isNullOrEmpty() }
+        ?: signingProperties.getProperty("release.storeFile"))?.let { rootProject.file(it) }
+    val releaseStorePassword = System.getenv("RELEASE_STORE_PASSWORD").takeIf { !it.isNullOrEmpty() }
+        ?: signingProperties.getProperty("release.storePassword")
+    val releaseKeyPassword = System.getenv("RELEASE_KEY_PASSWORD").takeIf { !it.isNullOrEmpty() }
+        ?: signingProperties.getProperty("release.keyPassword")
+    val releaseKeyAlias = System.getenv("RELEASE_KEY_ALIAS").takeIf { !it.isNullOrEmpty() }
+        ?: signingProperties.getProperty("release.keyAlias")
+        ?: "key0"
+
+    signingConfigs {
+        if (releaseStoreFile != null && releaseStoreFile.exists()) {
+            create("release") {
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (signingConfigs.findByName("release") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -55,8 +88,10 @@ android {
     
     sourceSets {
         getByName("main") {
-            java.srcDirs("src/main/java", "../scrcpy/server/src/main/java")
-            aidl.srcDirs("src/main/aidl", "../scrcpy/server/src/main/aidl")
+            java.directories.add("src/main/java")
+            java.directories.add("../scrcpy/server/src/main/java")
+            aidl.directories.add("src/main/aidl")
+            aidl.directories.add("../scrcpy/server/src/main/aidl")
         }
     }
 }
@@ -82,7 +117,7 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    implementation("dev.rikka.shizuku:api:13.1.5")
-    implementation("dev.rikka.shizuku:provider:13.1.5")
-    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+    implementation(libs.hiddenapibypass)
 }
