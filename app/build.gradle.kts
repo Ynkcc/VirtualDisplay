@@ -1,5 +1,9 @@
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.Properties
+import java.util.TimeZone
 
 plugins {
     alias(libs.plugins.android.application)
@@ -21,8 +25,30 @@ android {
         applicationId = "com.ynk.virtualdisplay"
         minSdk = 29
         targetSdk = 35 // targetSdk 36 is not yet stable, 35 is recommended for now
-        versionCode = 1
-        versionName = "1.0"
+
+        // 自动计算版本号与获取构建信息
+        val commitCount = providers.exec {
+            commandLine("git", "rev-list", "--count", "HEAD")
+        }.standardOutput.asText.map { it.trim().toIntOrNull() ?: 1 }.getOrElse(1)
+
+        val gitHash = providers.exec {
+            commandLine("git", "rev-parse", "--short", "HEAD")
+        }.standardOutput.asText.map { it.trim() }.getOrElse("unknown")
+
+        val isDirty = providers.exec {
+            commandLine("git", "status", "--porcelain")
+        }.standardOutput.asText.map { it.trim().isNotEmpty() }.getOrElse(false)
+
+        val buildTime = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone("GMT+8")
+        }.format(Date())
+
+        versionCode = commitCount
+        versionName = "1.0.$commitCount"
+
+        buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
+        buildConfigField("Boolean", "GIT_DIRTY", "$isDirty")
+        buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
