@@ -17,6 +17,21 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     companion object {
         private const val TAG = "ShizukuDisplayRepository"
         const val REQUEST_CODE = 20260
+
+        // 虚拟显示器标志常量定义（包含部分系统隐藏/私有标志，因此手动定义以保证编译通过）
+        private const val VIRTUAL_DISPLAY_FLAG_PUBLIC = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
+        private const val VIRTUAL_DISPLAY_FLAG_PRESENTATION = DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+        private const val VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY = DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+        private const val VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH = 1 shl 6 // 64
+        private const val VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT = 1 shl 7 // 128
+        private const val VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL = 1 shl 8 // 256
+        private const val VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS = 1 shl 9 // 512
+        private const val VIRTUAL_DISPLAY_FLAG_TRUSTED = 1 shl 10 // 1024
+        private const val VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP = 1 shl 11 // 2048
+        private const val VIRTUAL_DISPLAY_FLAG_ALWAYS_UNLOCKED = 1 shl 12 // 4096
+        private const val VIRTUAL_DISPLAY_FLAG_TOUCH_FEEDBACK_DISABLED = 1 shl 13 // 8192
+        private const val VIRTUAL_DISPLAY_FLAG_OWN_FOCUS = 1 shl 14 // 16384
+        private const val VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP = 1 shl 15 // 32768
     }
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.IDLE)
@@ -195,11 +210,23 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     }
 
     private fun buildDefaultFlags(): Int {
-        var flags = 1 or 2 or 8 or 64 or 128 or 256 or 512
+        var flags = VIRTUAL_DISPLAY_FLAG_PUBLIC or
+                VIRTUAL_DISPLAY_FLAG_PRESENTATION or
+                VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY or
+                VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH or
+                VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT or
+                VIRTUAL_DISPLAY_FLAG_DESTROY_CONTENT_ON_REMOVAL or
+                VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS
         if (Build.VERSION.SDK_INT >= 33) {
-            flags = flags or 1024 or 2048 or 4096 or 8192
+            flags = flags or
+                    VIRTUAL_DISPLAY_FLAG_TRUSTED or
+                    VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP or
+                    VIRTUAL_DISPLAY_FLAG_ALWAYS_UNLOCKED or
+                    VIRTUAL_DISPLAY_FLAG_TOUCH_FEEDBACK_DISABLED
             if (Build.VERSION.SDK_INT >= 34) {
-                flags = flags or 16384 or 32768
+                flags = flags or
+                        VIRTUAL_DISPLAY_FLAG_OWN_FOCUS or
+                        VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP
             }
         }
         return flags

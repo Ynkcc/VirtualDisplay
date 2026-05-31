@@ -120,6 +120,10 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
     }
 
     override fun createVirtualDisplay(name: String?, width: Int, height: Int, dpi: Int, surface: Surface?, flags: Int): Int {
+        val callingUid = android.os.Binder.getCallingUid()
+        val myUid = android.os.Process.myUid()
+        val myPackages = context.packageManager.getPackagesForUid(myUid)?.toList()
+        Log.d(TAG, "[DIAG] createVirtualDisplay: callingUid=$callingUid, myUid=$myUid, myPackages=$myPackages")
         Log.d(TAG, "createVirtualDisplay: name=$name, size=${width}x$height, dpi=$dpi, flags=0x${Integer.toHexString(flags)}")
         val displayManager = ServiceManager.getDisplayManager()
         var reader: ImageReader? = null
