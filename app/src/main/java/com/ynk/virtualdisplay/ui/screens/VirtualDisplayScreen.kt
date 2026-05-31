@@ -1,9 +1,11 @@
 package com.ynk.virtualdisplay.ui.screens
 
 import android.content.Intent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import com.ynk.virtualdisplay.BuildConfig
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -173,7 +175,61 @@ fun VirtualDisplayScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // 构建信息条（可折叠）
+            var buildInfoExpanded by remember { mutableStateOf(false) }
+            val dirtyMark = if (BuildConfig.GIT_DIRTY) " ●dirty" else ""
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                    .border(1.dp, Color.White.copy(alpha = 0.04f), RoundedCornerShape(10.dp))
+                    .clickable { buildInfoExpanded = !buildInfoExpanded }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "构建信息",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Text(
+                        text = "v${BuildConfig.VERSION_NAME}  ${BuildConfig.GIT_HASH}$dirtyMark",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (buildInfoExpanded) "▲" else "▼",
+                        fontSize = 9.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                }
+                AnimatedVisibility(visible = buildInfoExpanded) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+                        Spacer(modifier = Modifier.height(4.dp))
+                        BuildInfoRow("版本号",  "v${BuildConfig.VERSION_NAME}  (code ${BuildConfig.VERSION_CODE})")
+                        BuildInfoRow("Commit",  BuildConfig.GIT_HASH + if (BuildConfig.GIT_DIRTY) "  (dirty)" else "")
+                        BuildInfoRow("构建时间", BuildConfig.BUILD_TIME)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             // 3. 配置与创建屏幕卡片
             Card(
@@ -354,5 +410,25 @@ fun VirtualDisplayScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun BuildInfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+        )
+        Text(
+            text = value,
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            fontWeight = FontWeight.Medium
+        )
     }
 }
