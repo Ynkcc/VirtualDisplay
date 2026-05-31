@@ -27,6 +27,10 @@
 - **预览画面显示异常？**
   如果画面方向、比例或缩放不正确，可以尝试刷新显示或重新创建虚拟屏幕。
 
+- **创建屏幕时出现 `packageName must match the calling uid`？**
+  请确保以 **adb / shell 身份**激活 Shizuku，而非以 Root 身份激活。
+  部分设备的 [`DisplayManagerService`](https://github.com/cn00/android/blob/master/services/core/java/com/android/server/display/DisplayManagerService.java#L1532) 会校验调用者的 UID 与 packageName 是否匹配；而scrcpy 通过将 `PACKAGE_NAME` 固定为 `"com.android.shell"`，以 Root 身份运行时 会导致二者不匹配从而抛出 `SecurityException`。（ 本项目暂未对此进行修复。）
+
 ## 致谢
 
 本项目的实现离不开以下开源项目的支持：
