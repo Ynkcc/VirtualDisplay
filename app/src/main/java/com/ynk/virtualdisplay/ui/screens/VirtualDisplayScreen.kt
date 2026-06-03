@@ -1,6 +1,10 @@
 package com.ynk.virtualdisplay.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -49,6 +53,7 @@ fun VirtualDisplayScreen(
     
     var showAppSelectionDialogForDisplayId by remember { mutableStateOf<Int?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var showErrorDialog by remember { mutableStateOf(false) }
 
     val presets = remember(context) {
         val dm = context.resources.displayMetrics
@@ -168,12 +173,17 @@ fun VirtualDisplayScreen(
 
                 Spacer(modifier = Modifier.weight(1f))
 
+                val isError = status.startsWith("Error:")
                 Text(
                     text = "提示: $status",
                     fontSize = 10.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    color = if (isError)
+                        MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = if (isError) Modifier.clickable { showErrorDialog = true } else Modifier
                 )
             }
 
@@ -234,8 +244,39 @@ fun VirtualDisplayScreen(
             }
         }
 
+        // 错误详情弹窗
+        if (showErrorDialog) {
+            AlertDialog(
+                onDismissRequest = { showErrorDialog = false },
+                title = { Text("\u521b\u5efa\u5931\u8d25", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        text = status,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("\u9519\u8bef\u65e5\u5fd7", status))
+                        Toast.makeText(context, "\u5df2\u590d\u5236", Toast.LENGTH_SHORT).show()
+                        showErrorDialog = false
+                    }) {
+                        Text("\u590d\u5236")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showErrorDialog = false }) {
+                        Text("\u5173\u95ed")
+                    }
+                }
+            )
+        }
+
         // 6. 新建屏幕弹窗 (Creation Dialog)
         if (showCreateDialog) {
+
             Dialog(onDismissRequest = { showCreateDialog = false }) {
                 Card(
                     shape = RoundedCornerShape(16.dp),

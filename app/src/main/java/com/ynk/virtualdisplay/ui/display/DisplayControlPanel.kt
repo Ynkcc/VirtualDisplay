@@ -179,7 +179,6 @@ class DisplayControlPanel(
                     startRawX = event.rawX
                     startRawY = event.rawY
                     isDragging = false
-                    performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -248,7 +247,6 @@ class DisplayControlPanel(
         }
         handleContainer.layoutParams = handleLp
 
-        performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
     }
 }
 

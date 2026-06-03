@@ -232,21 +232,7 @@ fun SettingsScreen(
                 SystemInfoRow("构建时间", BuildConfig.BUILD_TIME)
                 SystemInfoRow("安卓 SDK 版本", "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
 
-                Spacer(modifier = Modifier.height(4.dp))
 
-                // 重启服务按钮
-                Button(
-                    onClick = { viewModel.forceRestartService(context) },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.85f),
-                        contentColor = Color.White
-                    ),
-                    enabled = !uiState.isLoading
-                ) {
-                    Text("强制重启 Shizuku 服务", fontWeight = FontWeight.Bold)
-                }
             }
         }
     }

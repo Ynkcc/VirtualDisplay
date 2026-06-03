@@ -77,8 +77,10 @@ class MainViewModel(
         }
     }
 
+    @Suppress("DEPRECATION")
     fun reloadDefaultInputsFromSettings(context: Context) {
         val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+
         val defaultDisplay = dm.getDisplay(Display.DEFAULT_DISPLAY)
         val size = Point()
         defaultDisplay?.getRealSize(size)
@@ -252,7 +254,7 @@ class MainViewModel(
         _uiState.update { it.copy(
             displays = displaysList,
             orphanDisplayIds = orphans,
-            statusMessage = "Displays refreshed"
+            statusMessage = if (it.statusMessage.startsWith("Error:")) it.statusMessage else "Displays refreshed"
         ) }
     }
 
