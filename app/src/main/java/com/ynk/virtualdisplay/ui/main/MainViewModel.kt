@@ -70,6 +70,39 @@ class MainViewModel(
         }
     }
 
+    fun switchTab(tab: ScreenTab) {
+        _uiState.update { it.copy(currentTab = tab) }
+        if (tab == ScreenTab.CONSOLE) {
+            reloadDefaultInputsFromSettings(appContext)
+        }
+    }
+
+    fun reloadDefaultInputsFromSettings(context: Context) {
+        val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+        val defaultDisplay = dm.getDisplay(Display.DEFAULT_DISPLAY)
+        val size = Point()
+        defaultDisplay?.getRealSize(size)
+        val metrics = DisplayMetrics()
+        defaultDisplay?.getRealMetrics(metrics)
+
+        val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
+        val defaultW = prefs.getString("pref_default_width", "") ?: ""
+        val defaultH = prefs.getString("pref_default_height", "") ?: ""
+        val defaultDpi = prefs.getString("pref_default_dpi", "") ?: ""
+
+        val w = defaultW.ifEmpty { size.x.toString() }
+        val h = defaultH.ifEmpty { size.y.toString() }
+        val dpi = defaultDpi.ifEmpty { metrics.densityDpi.toString() }
+
+        _uiState.update { state ->
+            state.copy(
+                inputWidth = w,
+                inputHeight = h,
+                inputDpi = dpi
+            )
+        }
+    }
+
     fun launchSelectedApp(context: Context, displayId: Int, packageName: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, statusMessage = "Launching $packageName on $displayId...") }
@@ -93,9 +126,14 @@ class MainViewModel(
         val metrics = DisplayMetrics()
         defaultDisplay?.getRealMetrics(metrics)
 
-        val w = size.x.toString()
-        val h = size.y.toString()
-        val dpi = metrics.densityDpi.toString()
+        val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
+        val defaultW = prefs.getString("pref_default_width", "") ?: ""
+        val defaultH = prefs.getString("pref_default_height", "") ?: ""
+        val defaultDpi = prefs.getString("pref_default_dpi", "") ?: ""
+
+        val w = defaultW.ifEmpty { size.x.toString() }
+        val h = defaultH.ifEmpty { size.y.toString() }
+        val dpi = defaultDpi.ifEmpty { metrics.densityDpi.toString() }
 
         _uiState.update { state ->
             state.copy(

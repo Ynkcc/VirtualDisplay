@@ -13,6 +13,11 @@ data class DisplayInfoModel(
     val height: Int
 )
 
+enum class ScreenTab {
+    CONSOLE,
+    SETTINGS
+}
+
 /**
  * 统一的界面状态聚合类
  */
@@ -23,6 +28,7 @@ data class MainUiState(
     val orphanDisplayIds: List<Int> = emptyList(),
     val statusMessage: String = "Ready",
     val isLoading: Boolean = false,
+    val currentTab: ScreenTab = ScreenTab.CONSOLE,
     
     // 输入相关状态
     val inputWidth: String = "",
