@@ -22,6 +22,14 @@ import com.ynk.virtualdisplay.MyApplication
 import com.ynk.virtualdisplay.data.model.ShizukuState
 import com.ynk.virtualdisplay.data.repository.ShizukuDisplayRepository
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Text
+import com.ynk.virtualdisplay.ui.screens.SettingsScreen
 import com.ynk.virtualdisplay.ui.screens.ShizukuPermissionScreen
 import com.ynk.virtualdisplay.ui.screens.VirtualDisplayScreen
 import com.ynk.virtualdisplay.ui.theme.MyApplicationTheme
@@ -60,7 +68,27 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme {
                 val uiState by viewModel.uiState.collectAsState()
                 
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    bottomBar = {
+                        if (uiState.shizukuState is ShizukuState.Ready) {
+                            NavigationBar {
+                                NavigationBarItem(
+                                    selected = uiState.currentTab == ScreenTab.CONSOLE,
+                                    onClick = { viewModel.switchTab(ScreenTab.CONSOLE) },
+                                    icon = { Icon(Icons.Default.Home, contentDescription = "控制台") },
+                                    label = { Text("控制台") }
+                                )
+                                NavigationBarItem(
+                                    selected = uiState.currentTab == ScreenTab.SETTINGS,
+                                    onClick = { viewModel.switchTab(ScreenTab.SETTINGS) },
+                                    icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
+                                    label = { Text("设置") }
+                                )
+                            }
+                        }
+                    }
+                ) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
                         when (val state = uiState.shizukuState) {
                             is ShizukuState.Checking -> {
@@ -69,7 +97,10 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             is ShizukuState.Ready -> {
-                                VirtualDisplayScreen(viewModel = viewModel)
+                                when (uiState.currentTab) {
+                                    ScreenTab.CONSOLE -> VirtualDisplayScreen(viewModel = viewModel)
+                                    ScreenTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
+                                }
                             }
                             else -> {
                                 ShizukuPermissionScreen(
