@@ -36,3 +36,7 @@
 本项目的实现离不开以下开源项目的支持：
 - [Shizuku](https://github.com/RikkaApps/Shizuku) - 提供免 Root/特权 API 访问能力。
 - [scrcpy](https://github.com/Genymobile/scrcpy) - 提供高效的屏幕控制与输入注入逻辑。
+
+## 开源协议
+
+本项目基于 [Apache License 2.0](LICENSE) 协议开源。
