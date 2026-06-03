@@ -12,6 +12,7 @@ import android.util.Log
 import android.view.Gravity
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.KeyEvent
 import android.annotation.SuppressLint
 import android.view.Surface
 import android.view.TextureView
@@ -373,169 +374,20 @@ class DisplayActivity : ComponentActivity() {
 
 
         // 优化版悬浮可拖拽的控制面板 - 升级为多功能横向玻璃态胶囊面板
-        val density = resources.displayMetrics.density
-        val panelHeight = (46 * density).toInt()
-        
-        val controlPanel = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            elevation = 15f * density
-            setPadding((10 * density).toInt(), 0, (10 * density).toInt(), 0)
-            
-            // 采用高质感的半透明磨砂黑圆角背景
-            background = android.graphics.drawable.GradientDrawable().apply {
-                shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-                setColor(android.graphics.Color.parseColor("#E01A1A1A")) // 更深一些的半透明灰黑，防背景干扰
-                cornerRadius = 23f * density // 胶囊圆角
-                setStroke((1.5f * density).toInt(), android.graphics.Color.parseColor("#40FFFFFF")) // 质感白色描边
-            }
-            
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                panelHeight,
-                Gravity.TOP or Gravity.START
-            ).apply {
-                leftMargin = (32 * density).toInt()
-                topMargin = (100 * density).toInt()
-            }
-            
-            // 1. 拖拽手柄 (左侧双竖线，传达拖拽指示)
-            val handleContainer = android.widget.LinearLayout(context).apply {
-                orientation = android.widget.LinearLayout.HORIZONTAL
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    (12 * density).toInt(),
-                    (18 * density).toInt()
-                ).apply {
-                    setMargins(0, 0, (8 * density).toInt(), 0)
-                }
-                gravity = Gravity.CENTER
-                
-                val line1 = android.view.View(context).apply {
-                    layoutParams = android.widget.LinearLayout.LayoutParams((1.5f * density).toInt(), ViewGroup.LayoutParams.MATCH_PARENT).apply {
-                        setMargins(0, 0, (2 * density).toInt(), 0)
-                    }
-                    setBackgroundColor(android.graphics.Color.parseColor("#80FFFFFF"))
-                }
-                val line2 = android.view.View(context).apply {
-                    layoutParams = android.widget.LinearLayout.LayoutParams((1.5f * density).toInt(), ViewGroup.LayoutParams.MATCH_PARENT)
-                    setBackgroundColor(android.graphics.Color.parseColor("#80FFFFFF"))
-                }
-                addView(line1)
-                addView(line2)
-            }
-            addView(handleContainer)
-
-            // 创建统一的控制按钮助手函数
-            fun createControlButton(iconRes: Int, onClick: () -> Unit): android.widget.ImageView {
-                return android.widget.ImageView(context).apply {
-                    setImageResource(iconRes)
-                    imageTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
-                    layoutParams = android.widget.LinearLayout.LayoutParams(
-                        (32 * density).toInt(),
-                        (32 * density).toInt()
-                    ).apply {
-                        setMargins((4 * density).toInt(), 0, (4 * density).toInt(), 0)
-                    }
-                    setPadding((6 * density).toInt(), (6 * density).toInt(), (6 * density).toInt(), (6 * density).toInt())
-                    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-                    isClickable = true
-                    isFocusable = true
-                    
-                    // 触摸高亮反馈与回弹效果
-                    val backgroundDrawable = android.graphics.drawable.GradientDrawable().apply {
-                        shape = android.graphics.drawable.GradientDrawable.OVAL
-                        setColor(Color.TRANSPARENT)
-                    }
-                    background = backgroundDrawable
-                    
-                    setOnTouchListener { v, event ->
-                        when (event.action) {
-                            MotionEvent.ACTION_DOWN -> {
-                                backgroundDrawable.setColor(android.graphics.Color.parseColor("#30FFFFFF"))
-                                v.animate().scaleX(0.9f).scaleY(0.9f).setDuration(50).start()
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                backgroundDrawable.setColor(Color.TRANSPARENT)
-                                v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(50).start()
-                                if (event.action == MotionEvent.ACTION_UP) {
-                                    onClick()
-                                }
-                            }
-                        }
-                        true
-                    }
-                }
-            }
-            
-            // 2. 返回键按钮
-            val backButton = createControlButton(R.drawable.ic_back) {
-                injectKey(android.view.KeyEvent.KEYCODE_BACK)
-            }
-            addView(backButton)
-            
-            // 3. 主页键按钮
-            val homeButton = createControlButton(R.drawable.ic_home) {
+        val controlPanel = DisplayControlPanel(
+            context = this,
+            onBackClick = { injectKey(android.view.KeyEvent.KEYCODE_BACK) },
+            onHomeClick = {
                 val displayId = remoteDisplayId
                 if (displayId != null) {
                     lifecycleScope.launch {
                         repository.launchHome(displayId)
                     }
                 }
-            }
-            addView(homeButton)
-            
-            // 4. 应用启动器按钮
-            val appButton = createControlButton(R.drawable.ic_apps) {
-                showAppSelectionDialog()
-            }
-            addView(appButton)
-            
-            // 5. 分割线
-            val divider = android.view.View(context).apply {
-                layoutParams = android.widget.LinearLayout.LayoutParams(
-                    (1 * density).toInt(),
-                    (20 * density).toInt()
-                ).apply {
-                    setMargins((6 * density).toInt(), 0, (6 * density).toInt(), 0)
-                }
-                setBackgroundColor(android.graphics.Color.parseColor("#30FFFFFF"))
-            }
-            addView(divider)
-            
-            // 6. 关闭退出按钮
-            val closeButton = createControlButton(R.drawable.ic_close) {
-                finish()
-            }
-            addView(closeButton)
-            
-            var dX = 0f
-            var dY = 0f
-            
-            // 面板整体拖拽监听
-            setOnTouchListener { view, event ->
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        dX = view.x - event.rawX
-                        dY = view.y - event.rawY
-                        view.animate().scaleX(1.03f).scaleY(1.03f).alpha(0.95f).setDuration(100).start()
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val parent = view.parent as android.view.View
-                        val newX = (event.rawX + dX).coerceIn(0f, (parent.width - view.width).toFloat())
-                        val newY = (event.rawY + dY).coerceIn(0f, (parent.height - view.height).toFloat())
-                        view.x = newX
-                        view.y = newY
-                        true
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        view.animate().scaleX(1.0f).scaleY(1.0f).alpha(1.0f).setDuration(100).start()
-                        true
-                    }
-                    else -> false
-                }
-            }
-        }
+            },
+            onAppLauncherClick = { showAppSelectionDialog() },
+            onCloseClick = { finish() }
+        )
         rootLayout.addView(controlPanel)
 
         setContentView(rootLayout)
@@ -743,6 +595,20 @@ class DisplayActivity : ComponentActivity() {
             repository.injectInputWithDisplayId(downEvent, displayId)
             repository.injectInputWithDisplayId(upEvent, displayId)
         }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            val prefs = getSharedPreferences("virtual_display_settings", MODE_PRIVATE)
+            val captureBack = prefs.getBoolean("capture_back", false)
+            if (captureBack) {
+                if (event.action == KeyEvent.ACTION_UP) {
+                    injectKey(KeyEvent.KEYCODE_BACK)
+                }
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 }
 
