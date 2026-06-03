@@ -27,9 +27,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ynk.virtualdisplay.ConnectionStatus
-import com.ynk.virtualdisplay.DisplayActivity
-import com.ynk.virtualdisplay.MainViewModel
+import com.ynk.virtualdisplay.data.repository.ConnectionStatus
+import com.ynk.virtualdisplay.ui.display.DisplayActivity
+import com.ynk.virtualdisplay.ui.main.MainViewModel
 import com.ynk.virtualdisplay.ui.components.DisplayItem
 import com.ynk.virtualdisplay.ui.components.AppSelectionDialog
 

@@ -27,8 +27,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.ynk.virtualdisplay.DisplayInfoModel
-import com.ynk.virtualdisplay.IDisplayRepository
+import com.ynk.virtualdisplay.ui.main.DisplayInfoModel
+import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch

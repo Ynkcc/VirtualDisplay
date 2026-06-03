@@ -31,7 +31,7 @@
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <activity
-            android:name=".MainActivity"
+            android:name=".ui.main.MainActivity"
             android:exported="true"
             android:theme="@style/Theme.MyApplication">
             <intent-filter>
@@ -42,7 +42,7 @@
         </activity>
 
         <activity
-            android:name=".DisplayActivity"
+            android:name=".ui.display.DisplayActivity"
             android:exported="false"
             android:label="Display Player"
             android:enableOnBackInvokedCallback="false"

@@ -2,6 +2,8 @@ package com.ynk.virtualdisplay
 
 import android.app.Application
 import android.util.Log
+import com.ynk.virtualdisplay.data.repository.IDisplayRepository
+import com.ynk.virtualdisplay.data.repository.ShizukuDisplayRepository
 
 class MyApplication : Application() {
     companion object {

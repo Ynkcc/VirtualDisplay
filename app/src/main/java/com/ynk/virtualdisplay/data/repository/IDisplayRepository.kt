@@ -1,4 +1,4 @@
-package com.ynk.virtualdisplay
+package com.ynk.virtualdisplay.data.repository
 
 import android.content.Context
 import android.view.InputEvent

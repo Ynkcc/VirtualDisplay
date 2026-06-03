@@ -1,4 +1,4 @@
-package com.ynk.virtualdisplay.models
+package com.ynk.virtualdisplay.data.model
 
 sealed class ShizukuState {
     data object Checking : ShizukuState()

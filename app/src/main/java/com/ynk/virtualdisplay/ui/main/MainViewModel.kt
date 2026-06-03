@@ -1,4 +1,4 @@
-package com.ynk.virtualdisplay
+package com.ynk.virtualdisplay.ui.main
 
 import android.content.Context
 import android.content.pm.PackageManager
@@ -12,7 +12,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ynk.virtualdisplay.models.ShizukuState
+import com.ynk.virtualdisplay.data.model.ShizukuState
+import com.ynk.virtualdisplay.data.repository.IDisplayRepository
+import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow

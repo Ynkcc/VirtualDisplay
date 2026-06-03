@@ -1,4 +1,8 @@
-package com.ynk.virtualdisplay
+package com.ynk.virtualdisplay.core.ipc
+
+import com.ynk.virtualdisplay.data.repository.ConnectionStatus
+import com.ynk.virtualdisplay.IDisplayService
+import com.ynk.virtualdisplay.BuildConfig
 
 import android.content.ComponentName
 import android.content.Context

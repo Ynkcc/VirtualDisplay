@@ -1,4 +1,6 @@
-package com.ynk.virtualdisplay
+package com.ynk.virtualdisplay.core.ipc
+
+import com.ynk.virtualdisplay.IDisplayService
 
 import android.content.Context
 import android.content.Intent

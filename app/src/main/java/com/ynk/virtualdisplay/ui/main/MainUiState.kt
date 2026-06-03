@@ -1,6 +1,7 @@
-package com.ynk.virtualdisplay
+package com.ynk.virtualdisplay.ui.main
 
-import com.ynk.virtualdisplay.models.ShizukuState
+import com.ynk.virtualdisplay.data.model.ShizukuState
+import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 
 /**
  * 虚拟显示器元数据模型

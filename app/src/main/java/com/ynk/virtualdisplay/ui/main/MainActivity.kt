@@ -1,4 +1,4 @@
-package com.ynk.virtualdisplay
+package com.ynk.virtualdisplay.ui.main
 
 import android.os.Bundle
 import android.util.Log
@@ -18,7 +18,10 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.ynk.virtualdisplay.models.ShizukuState
+import com.ynk.virtualdisplay.MyApplication
+import com.ynk.virtualdisplay.data.model.ShizukuState
+import com.ynk.virtualdisplay.data.repository.ShizukuDisplayRepository
+import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.ui.screens.ShizukuPermissionScreen
 import com.ynk.virtualdisplay.ui.screens.VirtualDisplayScreen
 import com.ynk.virtualdisplay.ui.theme.MyApplicationTheme

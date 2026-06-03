@@ -1,4 +1,7 @@
-package com.ynk.virtualdisplay
+package com.ynk.virtualdisplay.data.repository
+
+import com.ynk.virtualdisplay.core.ipc.ShizukuServiceBinder
+import com.ynk.virtualdisplay.IDisplayService
 
 import android.app.ActivityOptions
 import android.content.Context

@@ -1,4 +1,4 @@
-package com.ynk.virtualdisplay
+package com.ynk.virtualdisplay.ui.display
 
 import android.content.pm.ActivityInfo
 import android.graphics.Color
@@ -22,6 +22,10 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import com.ynk.virtualdisplay.MyApplication
+import com.ynk.virtualdisplay.R
+import com.ynk.virtualdisplay.data.repository.IDisplayRepository
+import com.ynk.virtualdisplay.data.model.AppInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -709,7 +713,7 @@ class DisplayActivity : ComponentActivity() {
             val installedApps = pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
             val appList = installedApps
                 .filter { info -> (info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM == 0) || (pm.getLaunchIntentForPackage(info.packageName) != null) }
-                .map { info -> com.ynk.virtualdisplay.models.AppInfo(info.loadLabel(pm).toString(), info.packageName) }
+                .map { info -> AppInfo(info.loadLabel(pm).toString(), info.packageName) }
                 .sortedBy { it.name }
             
             kotlinx.coroutines.withContext(Dispatchers.Main) {
