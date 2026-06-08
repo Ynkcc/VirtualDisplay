@@ -140,17 +140,22 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     override suspend fun launchApp(packageName: String, displayId: Int): Result<Int> = withContext(bridgeDispatcher) {
         runCatching {
             val svc = displayService ?: throw IllegalStateException("Service not connected")
-            val intent = Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-                setPackage(packageName)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
+            val pm = context.packageManager
+            val intent = pm.getLaunchIntentForPackage(packageName)
+                ?: pm.getLeanbackLaunchIntentForPackage(packageName)
+                ?: Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    setPackage(packageName)
+                }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             
             val options = ActivityOptions.makeBasic().apply {
                 launchDisplayId = displayId
             }.toBundle()
             
-            svc.startActivity(intent, options)
+            val result = svc.startActivity(intent, options)
+            // RecentAppHelper.addRecentApp(context, packageName)
+            result
         }
     }
 
