@@ -335,6 +335,18 @@ class DisplayUserService @Keep constructor(private val context: Context) : IDisp
             imageReader = imageReader,
             handlerThread = handlerThread
         )
+        disableImeForDisplay(displayId)
+    }
+
+    private fun disableImeForDisplay(displayId: Int) {
+        try {
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            val method = imm.javaClass.getMethod("setDisplayImePolicy", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+            method.invoke(imm, displayId, 2) // 2 corresponds to SHOW_IME_POLICY_HIDE
+            Log.d(TAG, "Successfully set IME policy to HIDE for display $displayId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set display IME policy for display $displayId", e)
+        }
     }
 
     private fun reconcileKnownDisplaysWithSystem() {

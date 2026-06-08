@@ -1,5 +1,9 @@
 package com.ynk.virtualdisplay.ui.display
 
+import android.content.Context
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.Matrix
@@ -27,6 +31,7 @@ import com.ynk.virtualdisplay.MyApplication
 import com.ynk.virtualdisplay.R
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.data.model.AppInfo
+import com.ynk.virtualdisplay.data.repository.RecentAppHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -149,6 +154,8 @@ class DisplayActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // 方案 B：不再在此设置全局的 FLAG_NOT_FOCUSABLE，而是通过只允许隐藏文本框聚焦来解决焦点冲突
 
         val displayId = intent.getIntExtra("display_id", -1)
         require(displayId != -1) { "Invalid display_id" }
@@ -286,6 +293,8 @@ class DisplayActivity : ComponentActivity() {
         }
     }
 
+    private lateinit var forwardingEditText: ForwardingEditText
+
     @Suppress("DEPRECATION")
     private fun enterFullscreen() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -303,6 +312,9 @@ class DisplayActivity : ComponentActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
             setBackgroundColor(Color.BLACK)
+            // 确保主屏幕布局本身不抢占焦点
+            isFocusable = false
+            isFocusableInTouchMode = false
             addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
                 updateSurfaceLayout()
             }
@@ -310,6 +322,9 @@ class DisplayActivity : ComponentActivity() {
 
         // 核心变动：改用 TextureView 接管底层渲染
         textureView = TextureView(this).apply {
+            // 确保渲染 View 也不抢占焦点
+            isFocusable = false
+            isFocusableInTouchMode = false
             surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                 override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
                     Log.d(TAG, "[DIAGNOSTIC] onSurfaceTextureAvailable: ${width}x${height}")
@@ -372,6 +387,14 @@ class DisplayActivity : ComponentActivity() {
             )
         )
 
+        // 添加隐藏文本框，用于接收主屏输入法输入并转发到虚拟屏幕
+        forwardingEditText = ForwardingEditText(this, displayId, repository, lifecycleScope).apply {
+            layoutParams = FrameLayout.LayoutParams(1, 1).apply {
+                leftMargin = -10
+                topMargin = -10
+            }
+        }
+        rootLayout.addView(forwardingEditText)
 
         // 优化版悬浮可拖拽的控制面板 - 升级为多功能横向玻璃态胶囊面板
         val controlPanel = DisplayControlPanel(
@@ -386,11 +409,26 @@ class DisplayActivity : ComponentActivity() {
                 }
             },
             onAppLauncherClick = { showAppSelectionDialog() },
+            onKeyboardClick = { toggleKeyboard() },
             onCloseClick = { finish() }
         )
         rootLayout.addView(controlPanel)
 
         setContentView(rootLayout)
+    }
+
+    private fun toggleKeyboard() {
+        if (!::forwardingEditText.isInitialized) return
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        if (forwardingEditText.isFocused) {
+            forwardingEditText.clearFocus()
+            imm.hideSoftInputFromWindow(forwardingEditText.windowToken, 0)
+            Log.d(TAG, "Keyboard hidden and focus cleared")
+        } else {
+            forwardingEditText.requestFocus()
+            imm.showSoftInput(forwardingEditText, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            Log.d(TAG, "Keyboard shown and requested focus")
+        }
     }
 
     private fun handleTouchEvent(event: MotionEvent): Boolean {
@@ -562,18 +600,34 @@ class DisplayActivity : ComponentActivity() {
     private fun showAppSelectionDialog() {
         val pm = packageManager
         lifecycleScope.launch(Dispatchers.IO) {
+            val recentPkgs = RecentAppHelper.getRecentApps(this@DisplayActivity)
             val installedApps = pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
-            val appList = installedApps
+            val allApps = installedApps
                 .filter { info -> (info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM == 0) || (pm.getLaunchIntentForPackage(info.packageName) != null) }
                 .map { info -> AppInfo(info.loadLabel(pm).toString(), info.packageName) }
-                .sortedBy { it.name }
+
+            val recentList = mutableListOf<AppInfo>()
+            recentPkgs.forEach { pkg ->
+                val app = allApps.find { it.packageName == pkg }
+                if (app != null) {
+                    recentList.add(app)
+                }
+            }
+            val otherList = allApps.filter { it.packageName !in recentPkgs }.sortedBy { it.name }
+            val sortedAppList = recentList + otherList
             
             kotlinx.coroutines.withContext(Dispatchers.Main) {
-                val names = appList.map { it.name }.toTypedArray()
+                val names = sortedAppList.map { app ->
+                    if (app.packageName in recentPkgs) {
+                        "${app.name} (最近)"
+                    } else {
+                        app.name
+                    }
+                }.toTypedArray()
                 android.app.AlertDialog.Builder(this@DisplayActivity)
                     .setTitle("选择要在该屏幕启动的应用")
                     .setItems(names) { dialog, which ->
-                        val selectedApp = appList[which]
+                        val selectedApp = sortedAppList[which]
                         val displayId = remoteDisplayId ?: return@setItems
                         lifecycleScope.launch {
                             repository.launchApp(selectedApp.packageName, displayId)
@@ -624,5 +678,139 @@ private data class DisplaySpec(
 ) {
     fun contains(x: Float, y: Float): Boolean {
         return x in left..(left + targetWidth) && y in top..(top + targetHeight)
+    }
+}
+
+/**
+ * 方案 B 自定义转发文本框
+ * 用于拦截主显示器输入法输入并实时安全转发至次级虚拟屏幕
+ */
+@SuppressLint("ViewConstructor")
+class ForwardingEditText(
+    ctx: Context,
+    private val targetDisplayId: Int,
+    private val repository: IDisplayRepository,
+    private val scope: kotlinx.coroutines.CoroutineScope
+) : android.widget.EditText(ctx) {
+
+    init {
+        isFocusable = true
+        isFocusableInTouchMode = true
+        alpha = 0f
+        setBackgroundColor(android.graphics.Color.TRANSPARENT)
+    }
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+        val superConnection = super.onCreateInputConnection(outAttrs) ?: return null
+        return object : InputConnectionWrapper(superConnection, true) {
+            
+            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                val str = text?.toString() ?: ""
+                if (str.isNotEmpty()) {
+                    injectTextToTarget(str)
+                }
+                return true
+            }
+
+            override fun sendKeyEvent(event: KeyEvent?): Boolean {
+                if (event != null) {
+                    injectKeyEventToTarget(event)
+                }
+                return true
+            }
+
+            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                for (i in 0 until beforeLength) {
+                    injectKeyToTarget(KeyEvent.KEYCODE_DEL)
+                }
+                return true
+            }
+        }
+    }
+
+    private fun injectTextToTarget(text: String) {
+        val kcm = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD)
+        val events = kcm.getEvents(text.toCharArray())
+        if (events != null) {
+            scope.launch(Dispatchers.Main) {
+                events.forEach { event ->
+                    val cleanEvent = KeyEvent(
+                        event.downTime,
+                        event.eventTime,
+                        event.action,
+                        event.keyCode,
+                        event.repeatCount,
+                        event.metaState,
+                        0,
+                        0,
+                        event.flags,
+                        InputDevice.SOURCE_KEYBOARD
+                    )
+                    repository.injectInputWithDisplayId(cleanEvent, targetDisplayId)
+                }
+            }
+        } else {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    // 1. 设置到主显示器系统剪贴板
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("virtual_display_input", text)
+                    clipboard.setPrimaryClip(clip)
+                    
+                    // 短暂延迟确保系统广播同步完成
+                    kotlinx.coroutines.delay(60)
+                    
+                    // 2. 注入 Ctrl + V 粘贴键
+                    injectPasteEvent()
+                } catch (e: Exception) {
+                    Log.e("ForwardingEditText", "Failed to inject text via clipboard", e)
+                }
+            }
+        }
+    }
+
+    private fun injectKeyEventToTarget(event: KeyEvent) {
+        scope.launch(Dispatchers.Main) {
+            val cleanEvent = KeyEvent(
+                event.downTime,
+                event.eventTime,
+                event.action,
+                event.keyCode,
+                event.repeatCount,
+                event.metaState,
+                0,
+                0,
+                0,
+                InputDevice.SOURCE_KEYBOARD
+            )
+            repository.injectInputWithDisplayId(cleanEvent, targetDisplayId)
+        }
+    }
+
+    private fun injectKeyToTarget(keyCode: Int) {
+        scope.launch(Dispatchers.Main) {
+            val now = android.os.SystemClock.uptimeMillis()
+            val downEvent = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
+            val upEvent = KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0)
+            repository.injectInputWithDisplayId(downEvent, targetDisplayId)
+            repository.injectInputWithDisplayId(upEvent, targetDisplayId)
+        }
+    }
+
+    private fun injectPasteEvent() {
+        scope.launch(Dispatchers.Main) {
+            val now = android.os.SystemClock.uptimeMillis()
+            
+            // 构造 Ctrl + V (META_CTRL_ON 状态的 KEYCODE_V)
+            val ctrlDown = KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT, 0, KeyEvent.META_CTRL_LEFT_ON or KeyEvent.META_CTRL_ON)
+            val vDown = KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_V, 0, KeyEvent.META_CTRL_LEFT_ON or KeyEvent.META_CTRL_ON)
+            val vUp = KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_V, 0, KeyEvent.META_CTRL_LEFT_ON or KeyEvent.META_CTRL_ON)
+            val ctrlUp = KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT, 0, 0)
+            
+            repository.injectInputWithDisplayId(ctrlDown, targetDisplayId)
+            repository.injectInputWithDisplayId(vDown, targetDisplayId)
+            repository.injectInputWithDisplayId(vUp, targetDisplayId)
+            repository.injectInputWithDisplayId(ctrlUp, targetDisplayId)
+        }
     }
 }

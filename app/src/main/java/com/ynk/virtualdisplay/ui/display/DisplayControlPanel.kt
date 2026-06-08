@@ -25,6 +25,7 @@ class DisplayControlPanel(
     private val onBackClick: () -> Unit,
     private val onHomeClick: () -> Unit,
     private val onAppLauncherClick: () -> Unit,
+    private val onKeyboardClick: () -> Unit,
     private val onCloseClick: () -> Unit
 ) : LinearLayout(context) {
 
@@ -144,6 +145,12 @@ class DisplayControlPanel(
             onAppLauncherClick()
         }
         buttonsContainer.addView(appButton)
+
+        // 4.5 键盘开关按钮
+        val keyboardButton = createControlButton(R.drawable.ic_keyboard) {
+            onKeyboardClick()
+        }
+        buttonsContainer.addView(keyboardButton)
 
         // 5. 分割线
         divider = View(context).apply {
