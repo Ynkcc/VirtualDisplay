@@ -154,7 +154,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
             }.toBundle()
             
             val result = svc.startActivity(intent, options)
-            // RecentAppHelper.addRecentApp(context, packageName)
+            RecentAppHelper.addRecentApp(context, packageName)
             result
         }
     }

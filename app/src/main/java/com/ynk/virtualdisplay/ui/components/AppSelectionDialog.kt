@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.ynk.virtualdisplay.data.model.AppInfo
+import com.ynk.virtualdisplay.data.repository.RecentAppHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -24,16 +25,30 @@ import kotlinx.coroutines.withContext
 fun AppSelectionDialog(onDismiss: () -> Unit, onAppSelected: (AppInfo) -> Unit) {
     val context = LocalContext.current
     var apps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
+    var recentPkgs by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
             val pm = context.packageManager
+            val recents = RecentAppHelper.getRecentApps(context)
+            recentPkgs = recents
+
             val installedApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-            apps = installedApps
+            val allApps = installedApps
                 .filter { info -> (info.flags and ApplicationInfo.FLAG_SYSTEM == 0) || (pm.getLaunchIntentForPackage(info.packageName) != null) }
                 .map { info -> AppInfo(info.loadLabel(pm).toString(), info.packageName) }
-                .sortedBy { app -> app.name }
+
+            val recentList = mutableListOf<AppInfo>()
+            recents.forEach { pkg ->
+                val app = allApps.find { it.packageName == pkg }
+                if (app != null) {
+                    recentList.add(app)
+                }
+            }
+            val otherList = allApps.filter { it.packageName !in recents }.sortedBy { it.name }
+
+            apps = recentList + otherList
             isLoading = false
         }
     }
@@ -53,6 +68,7 @@ fun AppSelectionDialog(onDismiss: () -> Unit, onAppSelected: (AppInfo) -> Unit) 
                 } else {
                     LazyColumn {
                         items(apps) { app ->
+                            val isRecent = remember(recentPkgs, app.packageName) { app.packageName in recentPkgs }
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -60,7 +76,11 @@ fun AppSelectionDialog(onDismiss: () -> Unit, onAppSelected: (AppInfo) -> Unit) 
                                     .padding(vertical = 12.dp)
                             ) {
                                 Text(text = app.name, style = MaterialTheme.typography.bodyLarge)
-                                Text(text = app.packageName, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                Text(
+                                    text = if (isRecent) "${app.packageName} • 最近启动" else app.packageName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isRecent) MaterialTheme.colorScheme.primary else Color.Gray
+                                )
                             }
                             HorizontalDivider()
                         }
@@ -70,3 +90,4 @@ fun AppSelectionDialog(onDismiss: () -> Unit, onAppSelected: (AppInfo) -> Unit) 
         }
     }
 }
+
