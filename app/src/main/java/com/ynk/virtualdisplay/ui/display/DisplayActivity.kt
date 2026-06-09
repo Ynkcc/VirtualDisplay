@@ -46,9 +46,11 @@ class DisplayActivity : ComponentActivity() {
     private var remoteDisplayId: Int? = null
     private var vdWidth = 0
     private var vdHeight = 0
+    private var currentRotation = -1
     private var activeDisplaySpec: DisplaySpec? = null
     private var touchGestureStarted = false
     private var isResizing = false
+    private var resizeJob: kotlinx.coroutines.Job? = null
 
     // 辅助证明黑屏问题的诊断变量
     private var lastFrameTimeMs = 0L
@@ -84,70 +86,30 @@ class DisplayActivity : ComponentActivity() {
     }
 
     private fun updateDisplayInfo(displayId: Int) {
-        if (isResizing) {
-            Log.d(TAG, "updateDisplayInfo: Ignore because isResizing = true")
-            return
-        }
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.getDisplay(displayId)?.let { display ->
             val size = Point()
             @Suppress("DEPRECATION")
             display.getRealSize(size)
             if (vdWidth != size.x || vdHeight != size.y) {
-                Log.d(TAG, "Virtual Display #$displayId Resized: ${size.x}x${size.y}")
+                Log.d(TAG, "Virtual Display #$displayId Size Changed: ${size.x}x${size.y}")
                 vdWidth = size.x
                 vdHeight = size.y
-                val targetOrientation = if (vdWidth > vdHeight) {
-                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                } else {
-                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                }
-                if (requestedOrientation != targetOrientation) {
-                    requestedOrientation = targetOrientation
-                }
                 textureView.surfaceTexture?.let { texture ->
-                    isResizing = true
                     texture.setDefaultBufferSize(vdWidth, vdHeight)
-                    val oldSurface = activeSurface
-                    val newSurface = Surface(texture)
-                    activeSurface = newSurface
-                    lifecycleScope.launch(Dispatchers.Main.immediate) {
-                        try {
-                            Log.d(TAG, "Re-sizing virtual display and re-setting surface due to size change: displayId=$displayId, size=${vdWidth}x${vdHeight}")
-                            val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
-                            val dpi = dm.getDisplay(displayId)?.let { d ->
-                                val metrics = android.util.DisplayMetrics()
-                                @Suppress("DEPRECATION")
-                                d.getMetrics(metrics)
-                                metrics.densityDpi
-                            } ?: android.util.DisplayMetrics.DENSITY_DEFAULT
-                            
-                            repository.resizeDisplay(displayId, vdWidth, vdHeight, dpi)
-                            repository.setDisplaySurface(displayId, newSurface)
-                            oldSurface?.release()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error during resize and re-bind surface", e)
-                        } finally {
-                            kotlinx.coroutines.delay(300)
-                            isResizing = false
-                            checkLatestDisplayInfo(displayId)
-                        }
-                    }
                 }
                 updateSurfaceLayout()
-            }
-        }
-    }
 
-    private fun checkLatestDisplayInfo(displayId: Int) {
-        val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
-        dm.getDisplay(displayId)?.let { display ->
-            val size = Point()
-            @Suppress("DEPRECATION")
-            display.getRealSize(size)
-            if (vdWidth != size.x || vdHeight != size.y) {
-                Log.d(TAG, "checkLatestDisplayInfo: detect size difference after resize finished, triggering update")
-                updateDisplayInfo(displayId)
+                // 当虚拟屏幕内尺寸或旋转发生变更时，防抖同步调整底层的物理分辨率，避免画面截断拉伸及频繁 resize 引起画面闪烁
+                val metrics = android.util.DisplayMetrics()
+                @Suppress("DEPRECATION")
+                display.getRealMetrics(metrics)
+                val dpi = metrics.densityDpi
+                resizeJob?.cancel()
+                resizeJob = lifecycleScope.launch {
+                    kotlinx.coroutines.delay(250)
+                    repository.resizeDisplay(displayId, size.x, size.y, dpi)
+                }
             }
         }
     }
@@ -190,6 +152,7 @@ class DisplayActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        resizeJob?.cancel()
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.unregisterDisplayListener(displayListener)
     }
@@ -558,33 +521,47 @@ class DisplayActivity : ComponentActivity() {
         val viewH = rootLayout.height.takeIf { it > 0 }?.toFloat() ?: return
 
         // ---------------------------------------------------------
-        // 虚拟屏内应用自行处理旋转：getRealSize 已返回旋转后的实际宽高。
-        // 我们只需做 fit-center 缩放，不需要额外旋转。
-        // TextureView 默认将 buffer 拉伸至 view 全屏，先抵消拉伸再等比缩放。
+        // 纯本地长边对齐适配逻辑：
+        // 如果虚拟屏幕与 View 的横竖方向不一致，通过 Matrix 旋转 90 度来强制长边平行，
+        // 从而忽略远端屏幕的物理旋转，避免画面截断或显示不全。
         // ---------------------------------------------------------
-        val scale = minOf(viewW / sourceW, viewH / sourceH)
+        val isSourceLandscape = sourceW > sourceH
+        val isViewLandscape = viewW > viewH
+        val needRotate = isSourceLandscape != isViewLandscape
+
+        val scale = if (needRotate) {
+            minOf(viewW / sourceH, viewH / sourceW)
+        } else {
+            minOf(viewW / sourceW, viewH / sourceH)
+        }
 
         val textureMatrix = Matrix()
         textureMatrix.postTranslate(-viewW / 2f, -viewH / 2f)
         textureMatrix.postScale(sourceW / viewW, sourceH / viewH) // 抵消全屏拉伸
-        textureMatrix.postScale(scale, scale)                      // fit-center 缩放
+        if (needRotate) {
+            textureMatrix.postRotate(90f)
+        }
+        textureMatrix.postScale(scale, scale)                      // 等比缩放
         textureMatrix.postTranslate(viewW / 2f, viewH / 2f)
 
         textureView.setTransform(textureMatrix)
 
         // ---------------------------------------------------------
-        // 触摸坐标映射：将屏幕坐标逆映射回虚拟屏坐标空间
+        // 触摸坐标映射：计算从 View 坐标系映射回原始虚拟显示器坐标系的逆矩阵
         // ---------------------------------------------------------
         val touchMatrix = Matrix()
         touchMatrix.postTranslate(-sourceW / 2f, -sourceH / 2f)
+        if (needRotate) {
+            touchMatrix.postRotate(90f)
+        }
         touchMatrix.postScale(scale, scale)
         touchMatrix.postTranslate(viewW / 2f, viewH / 2f)
 
         val inverseMatrix = Matrix()
         touchMatrix.invert(inverseMatrix)
 
-        val targetWidth = sourceW * scale
-        val targetHeight = sourceH * scale
+        val targetWidth = if (needRotate) sourceH * scale else sourceW * scale
+        val targetHeight = if (needRotate) sourceW * scale else sourceH * scale
 
         activeDisplaySpec = DisplaySpec(
             sourceWidth = sourceW,
