@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -54,6 +55,13 @@ fun VirtualDisplayScreen(
     var showAppSelectionDialogForDisplayId by remember { mutableStateOf<Int?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showErrorDialog by remember { mutableStateOf(false) }
+
+    val gridState = rememberLazyGridState()
+    val isFabExpanded by remember {
+        derivedStateOf {
+            gridState.firstVisibleItemIndex == 0 && gridState.firstVisibleItemScrollOffset < 100
+        }
+    }
 
     val presets = remember(context) {
         val dm = context.resources.displayMetrics
@@ -217,13 +225,14 @@ fun VirtualDisplayScreen(
                 }
             } else {
                 LazyVerticalGrid(
+                    state = gridState,
                     columns = GridCells.Fixed(2),
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 16.dp)
+                    contentPadding = PaddingValues(bottom = 72.dp)
                 ) {
                     items(displays, key = { it.id }) { displayInfo ->
                         DisplayItem(
@@ -425,22 +434,25 @@ fun VirtualDisplayScreen(
                 .padding(bottom = 24.dp),
             containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary,
-            shape = RoundedCornerShape(16.dp)
+            shape = RoundedCornerShape(50)
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                modifier = Modifier
+                    .padding(horizontal = if (isFabExpanded) 16.dp else 0.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Default.Add,
                     contentDescription = "新建显示器"
                 )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "新建显示器",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
+                if (isFabExpanded) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "新建显示器",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
             }
         }
     }
