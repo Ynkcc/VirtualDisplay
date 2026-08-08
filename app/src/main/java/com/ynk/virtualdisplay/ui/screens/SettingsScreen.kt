@@ -1,6 +1,5 @@
 package com.ynk.virtualdisplay.ui.screens
 
-import android.content.Context
 import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,11 +20,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.edit
 import com.ynk.virtualdisplay.BuildConfig
+import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.ui.main.MainViewModel
 import com.ynk.virtualdisplay.data.model.ALL_DISPLAY_FLAGS
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(
@@ -35,19 +35,24 @@ fun SettingsScreen(
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
     val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
 
-    // SharedPreferences for persistent settings
-    val prefs = remember { context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE) }
+    val serverPort by AppSettings.serverPortFlow(context).collectAsState(initial = 27183)
+    val captureBack by AppSettings.captureBackFlow(context).collectAsState(initial = false)
 
-    // States for display flags (loaded dynamically from SharedPreferences)
     val flagStates = remember {
-        mutableStateMapOf<String, Boolean>().apply {
-            ALL_DISPLAY_FLAGS.forEach { flag ->
-                put(flag.key, prefs.getBoolean(flag.key, flag.isDefaultEnabled))
-            }
+        mutableStateMapOf<String, Boolean>()
+    }
+
+    LaunchedEffect(Unit) {
+        val flags = AppSettings.getFlags(context)
+        ALL_DISPLAY_FLAGS.forEach { flag ->
+            flagStates[flag.key] = flags[flag.key] ?: flag.isDefaultEnabled
         }
     }
+
     var flagsExpanded by remember { mutableStateOf(false) }
+    var portText by remember { mutableStateOf(serverPort.toString()) }
 
     Column(
         modifier = modifier
@@ -63,7 +68,6 @@ fun SettingsScreen(
             color = MaterialTheme.colorScheme.onBackground
         )
 
-        // 2. Display Flags 配置卡片
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
@@ -91,7 +95,9 @@ fun SettingsScreen(
                             onClick = {
                                 ALL_DISPLAY_FLAGS.forEach { flag ->
                                     flagStates[flag.key] = flag.isDefaultEnabled
-                                    prefs.edit { putBoolean(flag.key, flag.isDefaultEnabled) }
+                                }
+                                scope.launch {
+                                    AppSettings.resetAllFlagsToDefault(context)
                                 }
                             },
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
@@ -123,7 +129,9 @@ fun SettingsScreen(
                                 checked = flagStates[flag.key] ?: flag.isDefaultEnabled,
                                 onCheckedChange = { isChecked ->
                                     flagStates[flag.key] = isChecked
-                                    prefs.edit { putBoolean(flag.key, isChecked) }
+                                    scope.launch {
+                                        AppSettings.setFlag(context, flag.key, isChecked)
+                                    }
                                 }
                             )
                             if (index < supportedFlags.lastIndex) {
@@ -135,7 +143,6 @@ fun SettingsScreen(
             }
         }
 
-        // 2.5 操作与手势设置
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
@@ -154,23 +161,20 @@ fun SettingsScreen(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
-                
-                var captureBack by remember {
-                    mutableStateOf(prefs.getBoolean("capture_back", false))
-                }
+
                 SettingSwitchRow(
                     title = "捕获返回事件",
                     description = "操作虚拟显示器时，拦截真实设备的返回手势或按键并传递到虚拟屏，防止退出投屏界面",
                     checked = captureBack,
                     onCheckedChange = { isChecked ->
-                        captureBack = isChecked
-                        prefs.edit { putBoolean("capture_back", isChecked) }
+                        scope.launch {
+                            AppSettings.setCaptureBack(context, isChecked)
+                        }
                     }
                 )
             }
         }
 
-        // TCP 网络设置卡片
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
@@ -191,10 +195,6 @@ fun SettingsScreen(
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
                 Spacer(modifier = Modifier.height(12.dp))
 
-                var portText by remember {
-                    mutableStateOf(prefs.getInt("server_port", 27183).toString())
-                }
-
                 OutlinedTextField(
                     value = portText,
                     onValueChange = { newValue ->
@@ -203,7 +203,9 @@ fun SettingsScreen(
                             portText = filtered
                             val portNum = filtered.toIntOrNull() ?: 27183
                             if (portNum in 1024..65535) {
-                                prefs.edit { putInt("server_port", portNum) }
+                                scope.launch {
+                                    AppSettings.setServerPort(context, portNum)
+                                }
                             }
                         }
                     },
@@ -223,7 +225,6 @@ fun SettingsScreen(
             }
         }
 
-        // 3. 服务诊断与系统信息卡片
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
@@ -242,7 +243,6 @@ fun SettingsScreen(
                 )
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
 
-                // 连接状态
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -253,7 +253,7 @@ fun SettingsScreen(
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    
+
                     val connectionStatus = uiState.connectionStatus
                     val (statusText, statusColor) = when (connectionStatus) {
                         ConnectionStatus.CONNECTED -> "已连接" to Color(0xFF26A69A)
@@ -279,14 +279,11 @@ fun SettingsScreen(
                     }
                 }
 
-                // 构建参数
                 val dirtyMark = if (BuildConfig.GIT_DIRTY) " ●dirty" else ""
                 SystemInfoRow("应用版本", "v${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})")
                 SystemInfoRow("Git Commit", "${BuildConfig.GIT_HASH}$dirtyMark")
                 SystemInfoRow("构建时间", BuildConfig.BUILD_TIME)
                 SystemInfoRow("安卓 SDK 版本", "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-
-
             }
         }
     }

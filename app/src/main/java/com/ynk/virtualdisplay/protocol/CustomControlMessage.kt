@@ -14,6 +14,7 @@ object CustomControlMessage {
     const val TYPE_GET_ACTIVE_DISPLAY_IDS: Int = 205
     const val TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID: Int = 206
     const val TYPE_SWITCH_DISPLAY: Int = 207
+    const val TYPE_EXIT_DAEMON: Int = 208
 
     private val sequenceGen = AtomicLong(1L)
 
@@ -68,6 +69,11 @@ object CustomControlMessage {
     fun createSwitchDisplay(displayId: Int, sequence: Long = nextSequence()): ByteArray {
         return buildMessage(TYPE_SWITCH_DISPLAY, sequence) {
             writeInt(displayId)
+        }
+    }
+
+    fun createExitDaemon(sequence: Long = nextSequence()): ByteArray {
+        return buildMessage(TYPE_EXIT_DAEMON, sequence) {
         }
     }
 

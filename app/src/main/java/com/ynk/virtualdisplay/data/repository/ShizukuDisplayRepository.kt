@@ -8,6 +8,7 @@ import android.os.Parcel
 import android.util.Log
 import android.view.InputEvent
 import android.view.Surface
+import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.model.ALL_DISPLAY_FLAGS
 import com.ynk.virtualdisplay.daemon.ClientDaemonManager
 import com.ynk.virtualdisplay.daemon.ClientDaemonConnection
@@ -46,6 +47,9 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
 
     private val _managedDisplayIds = MutableStateFlow<Set<Int>>(emptySet())
     override val managedDisplayIds: StateFlow<Set<Int>> = _managedDisplayIds.asStateFlow()
+
+    private val _daemonPid = MutableStateFlow(-1)
+    override val daemonPid: StateFlow<Int> = _daemonPid.asStateFlow()
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob() + exceptionHandler)
 
@@ -93,8 +97,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
             _connectionError.value = null
             _connectionStatus.value = ConnectionStatus.BINDING
 
-            val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
-            val port = prefs.getInt("server_port", 27183)
+            val port = AppSettings.getServerPort(context)
 
             val daemonStarted = withContext(Dispatchers.IO) {
                 daemonManager.startDaemon(port)
@@ -120,6 +123,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
             daemonConnection.startMessageLoop()
             _connectionError.value = null
             _connectionStatus.value = ConnectionStatus.CONNECTED
+            _daemonPid.value = daemonManager.getDaemonPid()
             refreshManagedDisplays()
         }
     }
@@ -134,8 +138,20 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
         dm.unregisterDisplayListener(displayListener)
         scope.launch {
             stopDecoder()
+            try {
+                if (daemonConnection.isConnected()) {
+                    Log.i(TAG, "Sending exit command to daemon...")
+                    val sequence = CustomControlMessage.nextSequence()
+                    val bytes = CustomControlMessage.createExitDaemon(sequence)
+                    daemonConnection.sendControlMessage(bytes)
+                    kotlinx.coroutines.delay(100)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to send exit command to daemon", e)
+            }
             daemonConnection.disconnect()
             daemonManager.stopDaemon()
+            _daemonPid.value = -1
             _connectionError.value = null
             _connectionStatus.value = ConnectionStatus.DISCONNECTED
             _managedDisplayIds.value = emptySet()
@@ -144,6 +160,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
 
     private fun refreshManagedDisplays() {
         scope.launch {
+            _daemonPid.value = daemonManager.getDaemonPid()
             val result = getActiveDisplayIds()
             result.onSuccess { ids ->
                 _managedDisplayIds.value = ids.toSet()
@@ -160,8 +177,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
         if (!isShizukuAvailable()) {
             return false
         }
-        val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
-        val port = prefs.getInt("server_port", 27183)
+        val port = AppSettings.getServerPort(context)
         val connected = daemonConnection.connect(port = port, timeoutMs = 5000)
         if (connected) {
             daemonConnection.startMessageLoop()
@@ -178,10 +194,17 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
                 val sequence = CustomControlMessage.nextSequence()
                 val bytes = CustomControlMessage.createCreateVirtualDisplay(name, width, height, dpi, finalFlags, sequence)
                 val response = daemonConnection.sendAndAwait(bytes, sequence)
-                if (response is CustomDeviceMessage.GenericResponse && response.statusCode == 0) {
-                    response.displayId
+                if (response == null) {
+                    throw IllegalStateException("Failed to create display: Timeout or connection lost")
+                }
+                if (response is CustomDeviceMessage.GenericResponse) {
+                    if (response.statusCode == 0) {
+                        response.displayId
+                    } else {
+                        throw IllegalStateException("Failed to create display: ${response.message ?: "Unknown error"} (code=${response.statusCode})")
+                    }
                 } else {
-                    throw IllegalStateException("Failed to create display: $response")
+                    throw IllegalStateException("Failed to create display: Unexpected response type $response")
                 }
             }
         }
@@ -194,10 +217,17 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
                 val sequence = CustomControlMessage.nextSequence()
                 val bytes = CustomControlMessage.createReleaseVirtualDisplay(displayId, sequence)
                 val response = daemonConnection.sendAndAwait(bytes, sequence)
-                if (response is CustomDeviceMessage.GenericResponse && response.statusCode == 0) {
-                    refreshManagedDisplays()
+                if (response == null) {
+                    throw IllegalStateException("Failed to release display: Timeout or connection lost")
+                }
+                if (response is CustomDeviceMessage.GenericResponse) {
+                    if (response.statusCode == 0) {
+                        refreshManagedDisplays()
+                    } else {
+                        throw IllegalStateException("Failed to release display: ${response.message ?: "Unknown error"} (code=${response.statusCode})")
+                    }
                 } else {
-                    throw IllegalStateException("Failed to release display: $response")
+                    throw IllegalStateException("Failed to release display: Unexpected response type $response")
                 }
             }
         }
@@ -240,8 +270,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
 
     private suspend fun startStreamingToDisplay(displayId: Int) {
         if (!daemonConnection.isConnected()) {
-            val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
-            val port = prefs.getInt("server_port", 27183)
+            val port = AppSettings.getServerPort(context)
             val connected = daemonConnection.connect(port = port, timeoutMs = 5000)
             if (!connected) {
                 throw IllegalStateException("Failed to connect to daemon")
@@ -434,8 +463,20 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     override fun destroyService() {
         scope.launch {
             stopDecoder()
+            try {
+                if (daemonConnection.isConnected()) {
+                    Log.i(TAG, "Sending exit command to daemon...")
+                    val sequence = CustomControlMessage.nextSequence()
+                    val bytes = CustomControlMessage.createExitDaemon(sequence)
+                    daemonConnection.sendControlMessage(bytes)
+                    kotlinx.coroutines.delay(100)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to send exit command to daemon", e)
+            }
             daemonConnection.disconnect()
             daemonManager.stopDaemon()
+            _daemonPid.value = -1
             _connectionError.value = null
             _connectionStatus.value = ConnectionStatus.IDLE
             _managedDisplayIds.value = emptySet()
@@ -453,12 +494,12 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
         decoder?.onPerformanceStats = callback
     }
 
-    private fun buildDefaultFlags(): Int {
-        val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
+    private suspend fun buildDefaultFlags(): Int {
+        val flagValues = AppSettings.getFlags(context)
         var flagsSum = 0
         ALL_DISPLAY_FLAGS.forEach { flag ->
             if (flag.minSdk <= android.os.Build.VERSION.SDK_INT) {
-                val isEnabled = prefs.getBoolean(flag.key, flag.isDefaultEnabled)
+                val isEnabled = flagValues[flag.key] ?: flag.isDefaultEnabled
                 if (isEnabled) {
                     flagsSum = flagsSum or flag.bitValue
                 }

@@ -68,19 +68,29 @@ class H264StreamDecoder(
     // Performance statistics variables
     private val frameCount = AtomicLong(0)
     private val droppedOutputFrames = AtomicLong(0)
+    @Volatile
     private var decodeLatencyEwmaMs: Double = 0.0
     private var dequeueWaitEwmaMs: Double = 0.0
     private val inputEnqueueNsByPtsUs = java.util.concurrent.ConcurrentHashMap<Long, Long>()
 
+    @Volatile
     private var renderLatencyEwmaMs = 0.0
+    @Volatile
     private var presentIntervalEwmaMs = 0.0
+    @Volatile
     private var pacingVarianceEwmaMs = 0.0
+    @Volatile
     private var lastPresentNs = 0L
+    @Volatile
     private var renderWindowStartMs = 0L
+    @Volatile
     private var renderedFramesWindow = 0
+    @Volatile
     private var currentFps = 0.0
 
+    @Volatile
     private var actualWidth: Int = width
+    @Volatile
     private var actualHeight: Int = height
     private var bytesReceivedWindow: Long = 0
     private var windowStartMs: Long = 0
@@ -331,7 +341,12 @@ class H264StreamDecoder(
                     continue
                 }
 
-                val inputBuffer = activeCodec.getInputBuffer(inputIndex) ?: continue
+                val inputBuffer = activeCodec.getInputBuffer(inputIndex)
+                if (inputBuffer == null) {
+                    Log.w(TAG, "getInputBuffer returned null, codec may be in error state. Returning empty buffer and breaking.")
+                    runCatching { activeCodec.queueInputBuffer(inputIndex, 0, 0, ptsUs, 0) }
+                    break
+                }
                 inputBuffer.clear()
                 inputBuffer.put(packetBuf, 0, packetSize)
 

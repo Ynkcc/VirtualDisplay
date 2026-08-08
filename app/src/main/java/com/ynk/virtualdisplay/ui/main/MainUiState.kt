@@ -30,6 +30,7 @@ data class MainUiState(
     val isLoading: Boolean = false,
     val currentTab: ScreenTab = ScreenTab.CONSOLE,
     val isRestartCooldown: Boolean = false,
+    val daemonPid: Int = -1,
     
     // 输入相关状态
     val inputWidth: String = "",

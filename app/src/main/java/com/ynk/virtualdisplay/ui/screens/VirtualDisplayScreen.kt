@@ -161,7 +161,10 @@ fun VirtualDisplayScreen(
             ) {
                 val connectionStatus = uiState.connectionStatus
                 val (statusText, statusColor) = when (connectionStatus) {
-                    ConnectionStatus.CONNECTED -> "特权服务: 已连接" to Color(0xFF26A69A)
+                    ConnectionStatus.CONNECTED -> {
+                        val suffix = if (uiState.daemonPid > 0) " (PID: ${uiState.daemonPid})" else ""
+                        "特权服务: 已连接$suffix" to Color(0xFF26A69A)
+                    }
                     ConnectionStatus.BINDING -> "特权服务: 正在绑定..." to Color(0xFFFFB74D)
                     ConnectionStatus.DISCONNECTED -> "特权服务: 连接断开" to Color(0xFFEF5350)
                     ConnectionStatus.ERROR -> "特权服务: 错误" to Color(0xFFEF5350)

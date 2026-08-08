@@ -3,7 +3,7 @@ package com.ynk.virtualdisplay.data.repository
 import android.content.Context
 import android.view.InputEvent
 import android.view.Surface
-import androidx.core.content.edit
+import com.ynk.virtualdisplay.data.AppSettings
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -35,6 +35,11 @@ interface IDisplayRepository {
      * 当前管理中的显示器 ID 列表
      */
     val managedDisplayIds: StateFlow<Set<Int>>
+
+    /**
+     * 当前守护进程的 PID
+     */
+    val daemonPid: StateFlow<Int>
 
     /**
      * 绑定并初始化 Shizuku 服务
@@ -121,27 +126,14 @@ interface IDisplayRepository {
  * 辅助管理用户在虚拟屏幕中最近启动的 app 记录
  */
 object RecentAppHelper {
-    private const val PREF_NAME = "virtual_display_settings"
-    private const val KEY_RECENT_APPS = "recent_apps"
     private const val MAX_LIMIT = 10
 
-    fun getRecentApps(context: Context): List<String> {
-        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-        val recentStr = prefs.getString(KEY_RECENT_APPS, "") ?: ""
-        if (recentStr.isEmpty()) return emptyList()
-        return recentStr.split(",")
+    suspend fun getRecentApps(context: Context): List<String> {
+        return AppSettings.recentApps(context)
     }
 
-    fun addRecentApp(context: Context, packageName: String) {
-        val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-        val recentStr = prefs.getString(KEY_RECENT_APPS, "") ?: ""
-        val currentList = if (recentStr.isEmpty()) mutableListOf() else recentStr.split(",").toMutableList()
-        
-        currentList.remove(packageName)
-        currentList.add(0, packageName)
-        
-        val savedList = if (currentList.size > MAX_LIMIT) currentList.take(MAX_LIMIT) else currentList
-        prefs.edit { putString(KEY_RECENT_APPS, savedList.joinToString(",")) }
+    suspend fun addRecentApp(context: Context, packageName: String) {
+        AppSettings.addRecentApp(context, packageName, MAX_LIMIT)
     }
 }
 

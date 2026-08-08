@@ -2,6 +2,7 @@ package com.ynk.virtualdisplay.daemon
 
 import android.content.Context
 import android.util.Log
+import com.ynk.virtualdisplay.data.DaemonPrefs
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuRemoteProcess
 
@@ -14,21 +15,68 @@ class ClientDaemonManager(private val context: Context) {
     private var process: Process? = null
     private var isRunning = false
 
+    private val daemonPrefs = DaemonPrefs(context)
+
+    fun getDaemonPid(): Int {
+        val savedPort = daemonPrefs.getSavedPortSync()
+        val port = if (savedPort > 0) savedPort else 27183
+        return findDaemonPid(port)
+    }
+
+    private fun findDaemonPid(port: Int): Int {
+        return try {
+            val script = "for pid in \$(pgrep -f [c]om.genymobile.scrcpy.Server); do if cat /proc/\$pid/cmdline | grep -q \"port=$port\"; then echo \$pid; break; fi; done"
+            val proc = invokeNewProcess(arrayOf("sh", "-c", script), null, null)
+            if (proc != null) {
+                val output = proc.inputStream.bufferedReader().use { it.readText() }.trim()
+                proc.waitFor()
+                if (output.isNotEmpty()) {
+                    output.toIntOrNull() ?: -1
+                } else {
+                    -1
+                }
+            } else {
+                -1
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "findDaemonPid failed for port $port", e)
+            -1
+        }
+    }
+
+    private fun getSavedPid(port: Int): Int {
+        val pid = findDaemonPid(port)
+        if (pid > 0) {
+            savePid(port, pid)
+            return pid
+        }
+        return daemonPrefs.getSavedPidForPort(port)
+    }
+
+    private fun savePid(port: Int, pid: Int) {
+        daemonPrefs.savePid(port, pid)
+    }
+
+    private fun clearSavedPid() {
+        daemonPrefs.clearSavedPid()
+    }
+
     fun startDaemon(port: Int): Boolean {
+        val savedPid = findDaemonPid(port)
+        if (savedPid > 0) {
+            Log.i(TAG, "Daemon is already running with pid $savedPid on port $port. Reusing it.")
+            savePid(port, savedPid)
+            isRunning = true
+            return true
+        }
+
+        clearSavedPid()
+
         return try {
             val cmd = arrayOf(
-                "app_process",
-                "/",
-                "com.genymobile.scrcpy.Server",
-                com.genymobile.scrcpy.BuildConfig.VERSION_NAME,
-                "tunnel_forward=true",
-                "audio=false",
-                "send_device_meta=false",
-                "send_dummy_byte=false",
-                "send_stream_meta=false",
-                "send_frame_meta=true",
-                "--daemon",
-                "--port=$port"
+                "sh",
+                "-c",
+                "nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true --daemon --port=$port >/dev/null 2>&1 &"
             )
 
             val classpath = context.packageCodePath + ":" + context.applicationInfo.sourceDir
@@ -45,31 +93,13 @@ class ClientDaemonManager(private val context: Context) {
             if (remoteProcess != null) {
                 process = remoteProcess
 
-                // 异步读取错误和标准输出流并输出到 Logcat
-                Thread {
-                    try {
-                        remoteProcess.errorStream.bufferedReader().useLines { lines ->
-                            lines.forEach { line -> Log.e(TAG, "[Daemon-Stderr] $line") }
-                        }
-                    } catch (e: Throwable) {
-                        Log.e(TAG, "Error reading daemon stderr", e)
-                    }
-                }.start()
-                Thread {
-                    try {
-                        remoteProcess.inputStream.bufferedReader().useLines { lines ->
-                            lines.forEach { line -> Log.i(TAG, "[Daemon-Stdout] $line") }
-                        }
-                    } catch (e: Throwable) {
-                        Log.e(TAG, "Error reading daemon stdout", e)
-                    }
-                }.start()
-
                 Thread.sleep(800)
-                val alive = isProcessAlive(remoteProcess)
+                val activePid = findDaemonPid(port)
+                val alive = activePid > 0
                 isRunning = alive
                 if (alive) {
-                    Log.i(TAG, "Daemon started successfully")
+                    Log.i(TAG, "Daemon started successfully with pid $activePid")
+                    savePid(port, activePid)
                 } else {
                     Log.e(TAG, "Daemon process is not alive after start")
                     process = null
@@ -85,91 +115,30 @@ class ClientDaemonManager(private val context: Context) {
         }
     }
 
-    private fun getProcessPid(process: Process): Int {
-        return try {
-            val field = process.javaClass.getDeclaredField("pid")
-            field.isAccessible = true
-            field.get(process) as Int
-        } catch (e: Throwable) {
-            Log.d(TAG, "Pid field reflection failed, trying pid() method", e)
-            try {
-                val method = process.javaClass.getMethod("pid")
-                (method.invoke(process) as Long).toInt()
-            } catch (ex: Throwable) {
-                Log.d(TAG, "Pid method reflection also failed", ex)
-                -1
-            }
-        }
-    }
-
-    private fun isProcessAlive(proc: Process): Boolean {
-        try {
-            val exitCode = proc.exitValue()
-            Log.d(TAG, "isProcessAlive check: Process has exited with code $exitCode")
-            return false
-        } catch (e: IllegalThreadStateException) {
-            return true
-        } catch (e: IllegalArgumentException) {
-            // ShizukuRemoteProcess 底层通常在进程未退出时抛出此异常
-            return true
-        } catch (e: Throwable) {
-            val alive = try {
-                if (proc is ShizukuRemoteProcess) {
-                    proc.alive()
-                } else {
-                    proc.isAlive
-                }
-            } catch (_: Throwable) {
-                proc.isAlive
-            }
-            Log.d(TAG, "isProcessAlive fallback check: $alive")
-            return alive
-        }
-    }
-
     fun stopDaemon() {
-        val proc = process ?: return
+        val savedPort = daemonPrefs.getSavedPortSync()
+        val port = if (savedPort > 0) savedPort else 27183
+        val pid = getSavedPid(port)
         try {
-            Log.i(TAG, "Attempting to stop daemon gracefully...")
-            proc.destroy()
-
-            var isDead = false
-            for (i in 0 until 10) {
-                val alive = isProcessAlive(proc)
-                if (!alive) {
-                    isDead = true
-                    break
-                }
-                try {
-                    Thread.sleep(100)
-                } catch (ie: InterruptedException) {
-                    Log.w(TAG, "stopDaemon interrupted while waiting for graceful termination")
-                    Thread.currentThread().interrupt()
-                    break
-                }
-            }
-
-            if (!isDead) {
-                val pid = getProcessPid(proc)
-                if (pid > 0) {
-                    Log.w(TAG, "Daemon process still alive after 1s, force killing (kill -9 $pid)...")
-                    invokeNewProcess(arrayOf("kill", "-9", pid.toString()), null, null)?.destroy()
-                } else {
-                    Log.e(TAG, "Failed to get process pid, cannot force kill")
-                }
+            Log.i(TAG, "Attempting to stop daemon with pid $pid...")
+            if (pid > 0) {
+                val proc = invokeNewProcess(arrayOf("kill", "-9", pid.toString()), null, null)
+                proc?.waitFor()
             }
         } catch (e: Throwable) {
             Log.e(TAG, "stopDaemon failed", e)
         } finally {
             process = null
             isRunning = false
+            clearSavedPid()
             Log.i(TAG, "Daemon stopped")
         }
     }
 
     fun isDaemonRunning(): Boolean {
-        val proc = process ?: return false
-        return isProcessAlive(proc)
+        val savedPort = daemonPrefs.getSavedPortSync()
+        val port = if (savedPort > 0) savedPort else 27183
+        return findDaemonPid(port) > 0
     }
 
     private fun invokeNewProcess(cmd: Array<String>, env: Array<String>?, dir: String?): ShizukuRemoteProcess? {

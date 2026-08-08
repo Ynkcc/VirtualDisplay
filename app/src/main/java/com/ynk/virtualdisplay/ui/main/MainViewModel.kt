@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.model.ShizukuState
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
@@ -50,8 +51,9 @@ class MainViewModel(
     }
 
     init {
+        AppSettings.init(appContext)
         Shizuku.addRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER)
-        
+
         val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
         dm.registerDisplayListener(displayListener, null)
         
@@ -67,6 +69,12 @@ class MainViewModel(
                 if (error != null) {
                     _uiState.update { it.copy(statusMessage = "连接错误: $error") }
                 }
+            }
+        }
+        
+        viewModelScope.launch {
+            repository.daemonPid.collect { pid ->
+                _uiState.update { it.copy(daemonPid = pid) }
             }
         }
         
@@ -91,17 +99,15 @@ class MainViewModel(
 
     fun reloadDefaultInputsFromSettings(context: Context) {
         val deviceSpec = getDefaultDeviceSpec(context)
-        val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
-        val defaultW = prefs.getString("pref_default_width", "") ?: ""
-        val defaultH = prefs.getString("pref_default_height", "") ?: ""
-        val defaultDpi = prefs.getString("pref_default_dpi", "") ?: ""
-
-        _uiState.update { state ->
-            state.copy(
-                inputWidth = defaultW.ifEmpty { deviceSpec.width.toString() },
-                inputHeight = defaultH.ifEmpty { deviceSpec.height.toString() },
-                inputDpi = defaultDpi.ifEmpty { deviceSpec.dpi.toString() }
-            )
+        viewModelScope.launch {
+            val (defaultW, defaultH, defaultDpi) = AppSettings.getPrefDefaults(context)
+            _uiState.update { state ->
+                state.copy(
+                    inputWidth = defaultW.ifEmpty { deviceSpec.width.toString() },
+                    inputHeight = defaultH.ifEmpty { deviceSpec.height.toString() },
+                    inputDpi = defaultDpi.ifEmpty { deviceSpec.dpi.toString() }
+                )
+            }
         }
     }
 
@@ -121,17 +127,15 @@ class MainViewModel(
 
     private fun checkAndInitDeviceMetrics(context: Context) {
         val deviceSpec = getDefaultDeviceSpec(context)
-        val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
-        val defaultW = prefs.getString("pref_default_width", "") ?: ""
-        val defaultH = prefs.getString("pref_default_height", "") ?: ""
-        val defaultDpi = prefs.getString("pref_default_dpi", "") ?: ""
-
-        _uiState.update { state ->
-            state.copy(
-                inputWidth = state.inputWidth.ifEmpty { defaultW.ifEmpty { deviceSpec.width.toString() } },
-                inputHeight = state.inputHeight.ifEmpty { defaultH.ifEmpty { deviceSpec.height.toString() } },
-                inputDpi = state.inputDpi.ifEmpty { defaultDpi.ifEmpty { deviceSpec.dpi.toString() } }
-            )
+        viewModelScope.launch {
+            val (defaultW, defaultH, defaultDpi) = AppSettings.getPrefDefaults(context)
+            _uiState.update { state ->
+                state.copy(
+                    inputWidth = state.inputWidth.ifEmpty { defaultW.ifEmpty { deviceSpec.width.toString() } },
+                    inputHeight = state.inputHeight.ifEmpty { defaultH.ifEmpty { deviceSpec.height.toString() } },
+                    inputDpi = state.inputDpi.ifEmpty { defaultDpi.ifEmpty { deviceSpec.dpi.toString() } }
+                )
+            }
         }
     }
 
