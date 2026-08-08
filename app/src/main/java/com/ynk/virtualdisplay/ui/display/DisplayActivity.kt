@@ -1,5 +1,8 @@
 package com.ynk.virtualdisplay.ui.display
 
+import android.widget.TextView
+import android.util.TypedValue
+import android.view.View
 import android.content.Context
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -61,6 +64,7 @@ class DisplayActivity : ComponentActivity() {
 
     private lateinit var rootLayout: FrameLayout
     private lateinit var textureView: TextureView
+    private lateinit var statsOverlay: TextView
     private val repository: IDisplayRepository by lazy {
         (application as MyApplication).displayRepository
     }
@@ -126,8 +130,6 @@ class DisplayActivity : ComponentActivity() {
         enterFullscreen()
         setupContentView(displayId)
 
-        repository.bindService(this)
-
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.registerDisplayListener(displayListener, null)
         updateDisplayInfo(displayId)
@@ -136,6 +138,24 @@ class DisplayActivity : ComponentActivity() {
         lifecycleScope.launch {
             repository.connectionStatus.collect { status ->
                 Log.d(TAG, "[DIAGNOSTIC] Shizuku connection status updated: $status")
+            }
+        }
+
+        repository.setPerformanceStatsCallback { stats ->
+            lifecycleScope.launch(Dispatchers.Main) {
+                if (::statsOverlay.isInitialized) {
+                    statsOverlay.text = stats
+                }
+            }
+        }
+
+        repository.setVideoConfigCallback { width, height ->
+            lifecycleScope.launch(Dispatchers.Main) {
+                Log.d(TAG, "Video config callback: ${width}x${height}")
+                vdWidth = width
+                vdHeight = height
+                textureView.surfaceTexture?.setDefaultBufferSize(width, height)
+                updateSurfaceLayout()
             }
         }
     }
@@ -152,7 +172,10 @@ class DisplayActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        repository.setPerformanceStatsCallback(null)
+        repository.setVideoConfigCallback(null)
         resizeJob?.cancel()
+        frameMonitoringJob?.cancel()
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.unregisterDisplayListener(displayListener)
     }
@@ -318,10 +341,11 @@ class DisplayActivity : ComponentActivity() {
                     Log.d(TAG, "[DIAGNOSTIC] onSurfaceTextureDestroyed")
                     val oldSurface = activeSurface
                     activeSurface = null
-                    if (isFinishing) {
-                        oldSurface?.release()
-                    } else {
-                        Log.d(TAG, "onSurfaceTextureDestroyed: Keeping surface active because activity is not finishing")
+                    lifecycleScope.launch(Dispatchers.Main.immediate) {
+                        repository.setDisplaySurface(displayId, null)
+                        if (isFinishing) {
+                            oldSurface?.release()
+                        }
                     }
                     return true
                 }
@@ -376,6 +400,24 @@ class DisplayActivity : ComponentActivity() {
             onCloseClick = { finish() }
         )
         rootLayout.addView(controlPanel)
+
+        // 性能监控悬浮信息叠层
+        statsOverlay = TextView(this).apply {
+            setTextColor(Color.GREEN)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setBackgroundColor(Color.parseColor("#80000000"))
+            setPadding(16, 16, 16, 16)
+            visibility = View.VISIBLE
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.END
+            ).apply {
+                topMargin = 120
+                rightMargin = 50
+            }
+        }
+        rootLayout.addView(statsOverlay)
 
         setContentView(rootLayout)
     }

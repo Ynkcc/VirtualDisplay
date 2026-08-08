@@ -1,9 +1,5 @@
 package com.ynk.virtualdisplay.ui.components
 
-import android.graphics.SurfaceTexture
-import android.view.Surface
-import android.view.TextureView
-import androidx.annotation.Keep
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -12,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,82 +16,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import com.ynk.virtualdisplay.ui.main.DisplayInfoModel
-import com.ynk.virtualdisplay.data.repository.IDisplayRepository
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-
-@Keep
-@Composable
-fun DisplayPreview(
-    displayId: Int,
-    repository: IDisplayRepository,
-    width: Int,
-    height: Int,
-    modifier: Modifier = Modifier
-) {
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var previewKey by remember { mutableStateOf(0) }
-
-    // 监听生命周期，在 ON_RESUME 时递增 key，强制重新创建 TextureView 实例，彻底清除脏缓存及脏尺寸状态
-    DisposableEffect(lifecycleOwner, displayId) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                previewKey++
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            CoroutineScope(Dispatchers.Main).launch {
-                repository.setDisplaySurface(displayId, null)
-            }
-        }
-    }
-
-    key(previewKey) {
-        AndroidView(
-            factory = { ctx ->
-                TextureView(ctx).apply {
-                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, w: Int, h: Int) {
-                            surfaceTexture.setDefaultBufferSize(width, height)
-                            val surface = Surface(surfaceTexture)
-                            CoroutineScope(Dispatchers.Main).launch {
-                                repository.setDisplaySurface(displayId, surface)
-                            }
-                        }
-
-                        override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, w: Int, h: Int) {
-                            surfaceTexture.setDefaultBufferSize(width, height)
-                        }
-
-                        override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
-                            return true
-                        }
-
-                        override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) {}
-                    }
-                }
-            },
-            modifier = modifier
-        )
-    }
-}
 
 @Composable
 fun DisplayItem(
     displayInfo: DisplayInfoModel,
-    repository: IDisplayRepository,
     isOrphan: Boolean = false,
     onPlay: () -> Unit,
     onDelete: () -> Unit,
@@ -159,11 +89,8 @@ fun DisplayItem(
                 )
             }
  
-            // 2. 预览区域
-            val width = displayInfo.width
-            val height = displayInfo.height
-            val aspectRatio = if (height > 0) width.toFloat() / height.toFloat() else 1f
-            BoxWithConstraints(
+            // 2. 预览区域（静态占位，点击操控按钮进入全屏查看）
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(110.dp)
@@ -172,26 +99,19 @@ fun DisplayItem(
                     .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center
             ) {
-                if (!isOrphan) {
-                    val parentRatio = maxWidth.value / maxHeight.value
-                    val (previewWidth, previewHeight) = if (aspectRatio > parentRatio) {
-                        maxWidth to (maxWidth / aspectRatio)
-                    } else {
-                        (maxHeight * aspectRatio) to maxHeight
-                    }
-                    DisplayPreview(
-                        displayId = displayInfo.id,
-                        repository = repository,
-                        width = width,
-                        height = height,
-                        modifier = Modifier.size(previewWidth, previewHeight)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.Tv,
+                        contentDescription = null,
+                        tint = if (isOrphan) Color.Gray.copy(alpha = 0.5f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                        modifier = Modifier.size(32.dp)
                     )
-                } else {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("无画面预览", color = Color.Gray, fontSize = 12.sp)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("需要再次连接", color = Color.Gray.copy(alpha = 0.7f), fontSize = 10.sp)
-                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (isOrphan) "未接管" else "点击操控查看",
+                        color = Color.Gray,
+                        fontSize = 11.sp
+                    )
                 }
             }
             
@@ -206,8 +126,10 @@ fun DisplayItem(
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
             )
+            val w = displayInfo.width
+            val h = displayInfo.height
             Text(
-                text = "${width} × ${height} (${if (width > height) "横屏" else "竖屏"})",
+                text = "${w} × ${h} (${if (w > h) "横屏" else "竖屏"})",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
             )

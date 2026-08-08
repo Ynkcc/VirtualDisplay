@@ -274,15 +274,16 @@ class MainViewModel(
 
     fun forceRestartService(context: Context) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Force restarting service...") }
+            _uiState.update { it.copy(isLoading = true, statusMessage = "重启守护进程...") }
             try {
-                repository.destroyService()
+                repository.unbindService()
+                kotlinx.coroutines.delay(500)
+                repository.bindService(context)
+                _uiState.update { it.copy(isLoading = false, statusMessage = "守护进程已重启") }
             } catch (e: Exception) {
-                Log.e("MainViewModel", "Failed to destroy service", e)
+                Log.e("MainViewModel", "Failed to restart service", e)
+                _uiState.update { it.copy(isLoading = false, statusMessage = "重启失败: ${e.message}") }
             }
-            kotlinx.coroutines.delay(1000)
-            repository.bindService(context)
-            _uiState.update { it.copy(isLoading = false, statusMessage = "Service restarted") }
         }
     }
 

@@ -237,7 +237,6 @@ fun VirtualDisplayScreen(
                     items(displays, key = { it.id }) { displayInfo ->
                         DisplayItem(
                             displayInfo = displayInfo,
-                            repository = viewModel.repository,
                             isOrphan = displayInfo.id in orphanDisplayIds,
                             onPlay = {
                                 val intent = Intent(context, DisplayActivity::class.java).apply {
