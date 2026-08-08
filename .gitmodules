@@ -1,3 +1,4 @@
 [submodule "scrcpy"]
 	path = scrcpy
 	url = https://github.com/ynkcc/scrcpy.git
+	branch = daemon-mode
