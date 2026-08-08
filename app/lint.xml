@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <issue id="UseRequiresApi">
+        <ignore path="../scrcpy/server/**" />
+    </issue>
+    <issue id="ObsoleteSdkInt">
+        <ignore path="../scrcpy/server/**" />
+    </issue>
+    <issue id="GradleDependency" severity="ignore" />
+    <issue id="AndroidGradlePluginVersion" severity="ignore" />
+    <issue id="NewerVersionAvailable" severity="ignore" />
+    <issue id="OldTargetApi" severity="ignore" />
+    <issue id="IconLauncherShape" severity="ignore" />
+    <issue id="IconLocation" severity="ignore" />
+    <issue id="IconDuplicates" severity="ignore" />
+</lint>

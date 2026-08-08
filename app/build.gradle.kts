@@ -13,10 +13,8 @@ plugins {
 android {
     namespace = "com.ynk.virtualdisplay"
     
-    // Restore the specific SDK version that was being used
     compileSdk {
-        @Suppress("UnstableApiUsage")
-        version = release(36) {
+        version = release(37) {
             minorApiLevel = 1
         }
     }
@@ -24,7 +22,7 @@ android {
     defaultConfig {
         applicationId = "com.ynk.virtualdisplay"
         minSdk = 29
-        targetSdk = 35 // targetSdk 36 is not yet stable, 35 is recommended for now
+        targetSdk = 36
 
         // 自动计算版本号与获取构建信息
         val commitCount = providers.exec {
@@ -53,8 +51,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // Explicitly set the Java toolchain for Android tasks
-    @Suppress("UnstableApiUsage")
     java {
         toolchain {
             languageVersion.set(JavaLanguageVersion.of(21))
@@ -102,8 +98,8 @@ android {
     }
     
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     buildFeatures {

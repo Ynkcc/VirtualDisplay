@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.data.repository.ShizukuDisplayRepository
+import com.ynk.virtualdisplay.util.ExceptionUtils
 
 class MyApplication : Application() {
     companion object {
@@ -15,6 +16,7 @@ class MyApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        ExceptionUtils.setupGlobalCrashHandler()
         Log.i(TAG, "MyApplication onCreate, initializing ShizukuDisplayRepository")
         displayRepository = ShizukuDisplayRepository(this)
     }
