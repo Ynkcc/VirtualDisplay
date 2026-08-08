@@ -43,7 +43,7 @@ interface IDisplayRepository {
     /**
      * 创建虚拟显示器 (挂起函数)
      */
-    suspend fun createDisplay(name: String, width: Int, height: Int, dpi: Int): Result<Int>
+    suspend fun createDisplay(name: String, width: Int, height: Int, dpi: Int, flags: Int = 0): Result<Int>
 
     /**
      * 释放指定显示器 (挂起函数)
@@ -51,7 +51,7 @@ interface IDisplayRepository {
     suspend fun releaseDisplay(displayId: Int): Result<Unit>
 
     /**
-     * 设置显示器 Surface (挂起函数)
+     * 设置显示器 Surface (挂起函数) — 驱动客户端 H264 解码器
      */
     suspend fun setDisplaySurface(displayId: Int, surface: Surface?): Result<Unit>
 
@@ -80,7 +80,15 @@ interface IDisplayRepository {
      */
     suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean>
 
+    /**
+     * 切换当前镜像的显示器目标 (挂起函数)
+     */
+    suspend fun switchDisplay(displayId: Int): Result<Unit>
 
+    /**
+     * 获取当前 Daemon 中的活动显示器 ID 列表
+     */
+    suspend fun getActiveDisplayIds(): Result<IntArray>
 
     /**
      * 判断 Shizuku 是否可用
@@ -91,6 +99,16 @@ interface IDisplayRepository {
      * 销毁远程特权服务
      */
     fun destroyService()
+
+    /**
+     * 设置视频配置回调
+     */
+    fun setVideoConfigCallback(callback: ((width: Int, height: Int) -> Unit)?)
+
+    /**
+     * 设置性能统计回调
+     */
+    fun setPerformanceStatsCallback(callback: ((String) -> Unit)?)
 }
 
 /**
