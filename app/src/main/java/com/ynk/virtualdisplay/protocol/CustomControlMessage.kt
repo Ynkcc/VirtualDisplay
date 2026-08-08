@@ -7,13 +7,13 @@ import java.util.concurrent.atomic.AtomicLong
 
 object CustomControlMessage {
 
-    const val TYPE_CREATE_VIRTUAL_DISPLAY: Byte = 101
-    const val TYPE_RELEASE_VIRTUAL_DISPLAY: Byte = 102
-    const val TYPE_RESIZE_VIRTUAL_DISPLAY: Byte = 103
-    const val TYPE_START_ACTIVITY: Byte = 104
-    const val TYPE_GET_ACTIVE_DISPLAY_IDS: Byte = 105
-    const val TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID: Byte = 106
-    const val TYPE_SWITCH_DISPLAY: Byte = 107
+    const val TYPE_CREATE_VIRTUAL_DISPLAY: Int = 201
+    const val TYPE_RELEASE_VIRTUAL_DISPLAY: Int = 202
+    const val TYPE_RESIZE_VIRTUAL_DISPLAY: Int = 203
+    const val TYPE_START_ACTIVITY: Int = 204
+    const val TYPE_GET_ACTIVE_DISPLAY_IDS: Int = 205
+    const val TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID: Int = 206
+    const val TYPE_SWITCH_DISPLAY: Int = 207
 
     private val sequenceGen = AtomicLong(1L)
 
@@ -71,10 +71,10 @@ object CustomControlMessage {
         }
     }
 
-    private fun buildMessage(type: Byte, sequence: Long, block: DataOutputStream.() -> Unit): ByteArray {
+    private fun buildMessage(type: Int, sequence: Long, block: DataOutputStream.() -> Unit): ByteArray {
         val baos = ByteArrayOutputStream()
         DataOutputStream(baos).use { dos ->
-            dos.writeByte(type.toInt())
+            dos.writeByte(type)
             dos.writeLong(sequence)
             dos.block()
         }

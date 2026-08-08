@@ -72,13 +72,19 @@ object VideoDecoderTuning {
         }
 
         Log.w(TAG, "All named decoders failed, falling back to createDecoderByType. Errors: $errors")
-        val fallback = MediaCodec.createDecoderByType(mimeType)
-        val format = buildFormat(mimeType, width, height, null)
-        val opts = mutableListOf<String>()
-        applyLowLatency(format, null, opts)
-        fallback.configure(format, surface, null, 0)
-        fallback.start()
-        return DecoderResult(fallback, fallback.name, opts)
+        try {
+            val fallback = MediaCodec.createDecoderByType(mimeType)
+            val format = buildFormat(mimeType, width, height, null)
+            val opts = mutableListOf<String>()
+            applyLowLatency(format, null, opts)
+            fallback.configure(format, surface, null, 0)
+            fallback.start()
+            Log.i(TAG, "Selected fallback decoder: ${fallback.name}")
+            return DecoderResult(fallback, fallback.name, opts)
+        } catch (e: Exception) {
+            Log.e(TAG, "Fallback decoder creation also failed. All decoders exhausted.", e)
+            throw RuntimeException("Failed to create decoder for $mimeType (${width}x${height}). Tried ${candidates.size} named decoders and fallback. Errors: $errors", e)
+        }
     }
 
     private fun buildCandidateList(mimeType: String): List<MediaCodecInfo> {
@@ -126,10 +132,9 @@ object VideoDecoderTuning {
     ): MediaFormat {
         val format = MediaFormat.createVideoFormat(mimeType, width, height)
 
-        try {
+        runCatching {
             format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 8 * 1024 * 1024)
-        } catch (_: Exception) {
-        }
+        }.onFailure { Log.d(TAG, "KEY_MAX_INPUT_SIZE not supported by this device", it) }
 
         return format
     }
@@ -138,17 +143,15 @@ object VideoDecoderTuning {
         runCatching {
             format.setInteger("low-latency", 1)
             opts.add("low-latency")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            runCatching {
-                format.setInteger(MediaFormat.KEY_PRIORITY, 0)
-                opts.add("priority=0")
-            }
-            runCatching {
-                format.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
-                opts.add("operating-rate=32767")
-            }
-        }
+        }.onFailure { Log.d(TAG, "Key 'low-latency' not supported", it) }
+        runCatching {
+            format.setInteger(MediaFormat.KEY_PRIORITY, 0)
+            opts.add("priority=0")
+        }.onFailure { Log.d(TAG, "KEY_PRIORITY not supported", it) }
+        runCatching {
+            format.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
+            opts.add("operating-rate=32767")
+        }.onFailure { Log.d(TAG, "KEY_OPERATING_RATE not supported", it) }
 
         if (decoderInfo != null) {
             val name = decoderInfo.name.lowercase()
@@ -162,33 +165,33 @@ object VideoDecoderTuning {
                 runCatching {
                     format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1)
                     opts.add("qti-low-latency")
-                }
+                }.onFailure { Log.d(TAG, "QTI low-latency key not supported", it) }
                 runCatching {
                     format.setInteger("vendor.qti-ext-dec-linear-transform.enable", 1)
                     opts.add("qti-linear-transform")
-                }
+                }.onFailure { Log.d(TAG, "QTI linear-transform key not supported", it) }
             }
             codecName.startsWith("omx.mtk") || codecName.startsWith("c2.mtk") -> {
                 runCatching {
                     format.setInteger("vendor.mtk.vdec.low-latency.mode", 1)
                     opts.add("mtk-low-latency")
-                }
+                }.onFailure { Log.d(TAG, "MTK low-latency key not supported", it) }
                 runCatching {
                     format.setInteger("vendor.mtk.vdec.preload.frame.count", 1)
                     opts.add("mtk-preload-1")
-                }
+                }.onFailure { Log.d(TAG, "MTK preload key not supported", it) }
             }
             codecName.startsWith("omx.exynos") || codecName.startsWith("c2.exynos") -> {
                 runCatching {
                     format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1)
                     opts.add("exynos-low-latency")
-                }
+                }.onFailure { Log.d(TAG, "Exynos low-latency key not supported", it) }
             }
             codecName.startsWith("omx.hisi") || codecName.startsWith("c2.hisi") -> {
                 runCatching {
                     format.setInteger("vendor.hisi-ext-dec-low-latency.enable", 1)
                     opts.add("hisi-low-latency")
-                }
+                }.onFailure { Log.d(TAG, "HiSilicon low-latency key not supported", it) }
             }
         }
     }

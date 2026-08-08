@@ -3,7 +3,6 @@ package com.ynk.virtualdisplay.decoder
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
-import android.os.Build
 import android.os.Process
 import android.util.Log
 import android.graphics.SurfaceTexture
@@ -15,6 +14,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class H264StreamDecoder(
     private val videoStream: InputStream,
@@ -49,6 +49,9 @@ class H264StreamDecoder(
     @Volatile
     private var dummySurface: Surface? = null
 
+    @Volatile
+    private var isUsingDummySurface: Boolean = false
+
     private var inputWorker: Thread? = null
     private var outputWorker: Thread? = null
     private val running = AtomicBoolean(false)
@@ -63,8 +66,8 @@ class H264StreamDecoder(
     private var renderScheduler: SurfaceRenderScheduler? = null
 
     // Performance statistics variables
-    private var frameCount: Long = 0
-    private var droppedOutputFrames: Long = 0
+    private val frameCount = AtomicLong(0)
+    private val droppedOutputFrames = AtomicLong(0)
     private var decodeLatencyEwmaMs: Double = 0.0
     private var dequeueWaitEwmaMs: Double = 0.0
     private val inputEnqueueNsByPtsUs = java.util.concurrent.ConcurrentHashMap<Long, Long>()
@@ -102,23 +105,16 @@ class H264StreamDecoder(
     }
 
     fun setDisplaySurface(surface: Surface?) {
-        val target = if (surface != null && surface.isValid) surface else getDummySurface()
+        val isDummy = surface == null || !surface.isValid
+        isUsingDummySurface = isDummy
+        val target = if (!isDummy) surface else getDummySurface()
         targetSurface = target
         val activeCodec = codec
         if (activeCodec != null) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                runCatching {
-                    activeCodec.setOutputSurface(target)
-                }.onFailure { e ->
-                    Log.w(TAG, "setOutputSurface failed, will rebuild codec", e)
-                    synchronized(codecLock) {
-                        if (codec === activeCodec) {
-                            rebuildCodec()
-                        }
-                    }
-                }
-            } else {
-                Log.w(TAG, "API < 23, rebuilding codec on surface change")
+            runCatching {
+                activeCodec.setOutputSurface(target)
+            }.onFailure { e ->
+                Log.w(TAG, "setOutputSurface failed, will rebuild codec", e)
                 synchronized(codecLock) {
                     if (codec === activeCodec) {
                         rebuildCodec()
@@ -145,8 +141,8 @@ class H264StreamDecoder(
         }
 
         // Reset stats
-        frameCount = 0
-        droppedOutputFrames = 0
+        frameCount.set(0)
+        droppedOutputFrames.set(0)
         decodeLatencyEwmaMs = 0.0
         dequeueWaitEwmaMs = 0.0
         inputEnqueueNsByPtsUs.clear()
@@ -365,7 +361,7 @@ class H264StreamDecoder(
     }
 
     private fun runOutputLoop() {
-        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_VIDEO) }
         val bufferInfo = MediaCodec.BufferInfo()
 
         while (running.get() && !Thread.currentThread().isInterrupted) {
@@ -394,7 +390,7 @@ class H264StreamDecoder(
                             decodeLatencyEwmaMs = updateEwma(decodeLatencyEwmaMs, latencyMs.coerceIn(0.0, 500.0), 0.1)
                         }
 
-                        if (targetSurface != null) {
+                        if (targetSurface != null && !isUsingDummySurface) {
                             if (ultraLowLatency) {
                                 runCatching { activeCodec.releaseOutputBuffer(outputIndex, System.nanoTime()) }
                                 val nowNs = System.nanoTime()
@@ -404,7 +400,7 @@ class H264StreamDecoder(
                                 pacingVarianceEwmaMs = updateEwma(pacingVarianceEwmaMs, Math.abs(intervalMs - presentIntervalEwmaMs))
                                 lastPresentNs = nowNs
                                 
-                                frameCount++
+                                frameCount.incrementAndGet()
                                 renderedFramesWindow++
                                 if (renderWindowStartMs == 0L) renderWindowStartMs = nowMs
                                 if (nowMs - renderWindowStartMs >= 1000) {
@@ -490,13 +486,13 @@ class H264StreamDecoder(
     }
 
     private fun updateRenderStatsDisplay() {
-        if (frameCount % 60L == 0L) {
+        if (frameCount.get() % 60L == 0L) {
             val statsStr = buildString {
                 append("分辨率: ${actualWidth}x${actualHeight} | 帧率: %.1f FPS".format(currentFps)).appendLine()
                 append("码率: %.2f Mbps".format(currentBitrateMbps)).appendLine()
                 append("解码延迟: %.1f ms".format(decodeLatencyEwmaMs)).appendLine()
                 append("渲染延迟: %.1f ms".format(renderLatencyEwmaMs)).appendLine()
-                append("丢帧数量: $droppedOutputFrames").appendLine()
+                append("丢帧数量: ${droppedOutputFrames.get()}").appendLine()
                 append("抖动: %.1f ms".format(pacingVarianceEwmaMs))
             }
             onPerformanceStats?.invoke(statsStr.trimEnd())
@@ -542,7 +538,10 @@ class H264StreamDecoder(
                 choreographer = Choreographer.getInstance()
                 ready.countDown()
             }
-            ready.await(1, java.util.concurrent.TimeUnit.SECONDS)
+            val initialized = ready.await(1, java.util.concurrent.TimeUnit.SECONDS)
+            if (!initialized) {
+                Log.e(TAG, "SurfaceRenderScheduler.start() timed out waiting for handlerThread. Choreographer may be null.")
+            }
         }
 
         fun offer(frame: DecodedOutputFrame) {
@@ -560,7 +559,7 @@ class H264StreamDecoder(
                 }
             }
             droppedFrames.forEach {
-                droppedOutputFrames++
+                droppedOutputFrames.incrementAndGet()
                 releaseFrame(it, render = false, frameTimeNanos = 0L)
             }
         }
@@ -588,7 +587,7 @@ class H264StreamDecoder(
             }
 
             if (nextFrame != null) {
-                releaseFrame(nextFrame!!, render = true, frameTimeNanos = frameTimeNanos)
+                releaseFrame(nextFrame, render = true, frameTimeNanos = frameTimeNanos)
                 lastRenderedFrameTimeNs = frameTimeNanos
             }
 
@@ -621,7 +620,7 @@ class H264StreamDecoder(
                     drained
                 }
                 leftovers.forEach {
-                    droppedOutputFrames++
+                    droppedOutputFrames.incrementAndGet()
                     releaseFrame(it, render = false, frameTimeNanos = 0L)
                 }
                 finished.countDown()
@@ -651,7 +650,7 @@ class H264StreamDecoder(
                     pacingVarianceEwmaMs = updateEwma(pacingVarianceEwmaMs, Math.abs(intervalMs - presentIntervalEwmaMs))
                     lastPresentNs = nowNs
                     
-                    frameCount++
+                    frameCount.incrementAndGet()
                     renderedFramesWindow++
                     val nowMs = nowNs / 1_000_000
                     if (renderWindowStartMs == 0L) renderWindowStartMs = nowMs

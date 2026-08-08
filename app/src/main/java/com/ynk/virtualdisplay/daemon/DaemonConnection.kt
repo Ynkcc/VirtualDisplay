@@ -1,16 +1,17 @@
 package com.ynk.virtualdisplay.daemon
 
-import android.net.LocalSocket
-import android.net.LocalSocketAddress
 import android.util.Log
 import com.ynk.virtualdisplay.protocol.CustomDeviceMessage
 import com.ynk.virtualdisplay.protocol.CustomDeviceMessageReader
+import com.ynk.virtualdisplay.util.ExceptionUtils
+import com.ynk.virtualdisplay.util.closeQuietly
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelChildren
@@ -24,20 +25,22 @@ import kotlinx.coroutines.withTimeout
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 
 class ClientDaemonConnection {
 
     companion object {
         private const val TAG = "DaemonConnection"
-        private const val SOCKET_NAME = "scrcpy"
         private const val RETRY_BASE_DELAY_MS = 100L
     }
 
-    private val connectionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val exceptionHandler = ExceptionUtils.coroutineExceptionHandler(TAG)
+    private val connectionScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
-    private var videoSocket: LocalSocket? = null
-    private var controlSocket: LocalSocket? = null
+    private var videoSocket: Socket? = null
+    private var controlSocket: Socket? = null
     private var controlReader: DataInputStream? = null
     private var controlWriter: DataOutputStream? = null
 
@@ -58,20 +61,20 @@ class ClientDaemonConnection {
 
     fun getVideoInputStream(): java.io.InputStream? = videoSocket?.inputStream
 
-    suspend fun connect(timeoutMs: Long = 3000): Boolean = withContext(Dispatchers.IO) {
+    suspend fun connect(port: Int, timeoutMs: Long = 5000): Boolean = withContext(Dispatchers.IO) {
         val deadline = System.currentTimeMillis() + timeoutMs
         var attempt = 0
         var lastException: IOException? = null
 
         while (System.currentTimeMillis() < deadline) {
             try {
-                closeQuietly()
+                closeQuietlyAll()
 
-                val video = LocalSocket()
-                val control = LocalSocket()
+                val video = Socket()
+                val control = Socket()
 
-                video.connect(LocalSocketAddress(SOCKET_NAME))
-                control.connect(LocalSocketAddress(SOCKET_NAME))
+                video.connect(InetSocketAddress("127.0.0.1", port), 1000)
+                control.connect(InetSocketAddress("127.0.0.1", port), 1000)
 
                 videoSocket = video
                 controlSocket = control
@@ -81,11 +84,11 @@ class ClientDaemonConnection {
                 startMessageLoopInternal()
 
                 connected = true
-                Log.i(TAG, "Connected to daemon successfully")
+                Log.i(TAG, "Connected to daemon TCP port $port successfully")
                 return@withContext true
             } catch (e: IOException) {
                 lastException = e
-                closeQuietly()
+                closeQuietlyAll()
                 attempt++
                 val backoff = RETRY_BASE_DELAY_MS * (1 shl (attempt - 1)).coerceAtMost(8)
                 val remaining = (deadline - System.currentTimeMillis()).coerceAtLeast(1)
@@ -93,11 +96,11 @@ class ClientDaemonConnection {
             }
         }
 
-        Log.e(TAG, "Failed to connect to daemon after ${timeoutMs}ms", lastException)
+        Log.e(TAG, "Failed to connect to daemon TCP port $port after ${timeoutMs}ms", lastException)
         false
     }
 
-    suspend fun disconnect() = withContext(Dispatchers.IO) {
+    suspend fun disconnect() = withContext(Dispatchers.IO + NonCancellable) {
         messageLoopRunning = false
         connected = false
         messageJob?.cancel()
@@ -108,7 +111,7 @@ class ClientDaemonConnection {
 
         connectionScope.coroutineContext.cancelChildren()
 
-        closeQuietly()
+        closeQuietlyAll()
 
         Log.i(TAG, "Disconnected from daemon")
     }
@@ -146,6 +149,8 @@ class ClientDaemonConnection {
                             Log.e(TAG, "IOException in message loop", e)
                         }
                         break
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         if (messageLoopRunning) {
                             Log.e(TAG, "Error reading message", e)
@@ -218,28 +223,16 @@ class ClientDaemonConnection {
     }
 
     private fun handleDisconnection() {
-        connectionScope.launch {
+        GlobalScope.launch(Dispatchers.IO + exceptionHandler + NonCancellable) {
             disconnect()
         }
     }
 
-    private fun closeQuietly() {
-        try {
-            controlReader?.close()
-        } catch (_: IOException) {
-        }
-        try {
-            controlWriter?.close()
-        } catch (_: IOException) {
-        }
-        try {
-            controlSocket?.close()
-        } catch (_: IOException) {
-        }
-        try {
-            videoSocket?.close()
-        } catch (_: IOException) {
-        }
+    private fun closeQuietlyAll() {
+        controlReader.closeQuietly()
+        controlWriter.closeQuietly()
+        controlSocket.closeQuietly()
+        videoSocket.closeQuietly()
         controlReader = null
         controlWriter = null
         controlSocket = null

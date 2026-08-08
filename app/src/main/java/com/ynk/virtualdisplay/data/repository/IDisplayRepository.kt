@@ -3,6 +3,7 @@ package com.ynk.virtualdisplay.data.repository
 import android.content.Context
 import android.view.InputEvent
 import android.view.Surface
+import androidx.core.content.edit
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -24,6 +25,11 @@ interface IDisplayRepository {
      * 连接状态流
      */
     val connectionStatus: StateFlow<ConnectionStatus>
+
+    /**
+     * 连接错误消息流 (当 connectionStatus == ERROR 时携带错误详情)
+     */
+    val connectionError: StateFlow<String?>
 
     /**
      * 当前管理中的显示器 ID 列表
@@ -135,7 +141,7 @@ object RecentAppHelper {
         currentList.add(0, packageName)
         
         val savedList = if (currentList.size > MAX_LIMIT) currentList.take(MAX_LIMIT) else currentList
-        prefs.edit().putString(KEY_RECENT_APPS, savedList.joinToString(",")).apply()
+        prefs.edit { putString(KEY_RECENT_APPS, savedList.joinToString(",")) }
     }
 }
 

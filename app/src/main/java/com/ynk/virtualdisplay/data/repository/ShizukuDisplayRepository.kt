@@ -14,6 +14,7 @@ import com.ynk.virtualdisplay.daemon.ClientDaemonConnection
 import com.ynk.virtualdisplay.decoder.H264StreamDecoder
 import com.ynk.virtualdisplay.protocol.CustomControlMessage
 import com.ynk.virtualdisplay.protocol.CustomDeviceMessage
+import com.ynk.virtualdisplay.util.ExceptionUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -36,13 +37,17 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
         private const val DEFAULT_DPI = 320
     }
 
+    private val exceptionHandler = ExceptionUtils.coroutineExceptionHandler(TAG)
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.IDLE)
     override val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
+
+    private val _connectionError = MutableStateFlow<String?>(null)
+    override val connectionError: StateFlow<String?> = _connectionError.asStateFlow()
 
     private val _managedDisplayIds = MutableStateFlow<Set<Int>>(emptySet())
     override val managedDisplayIds: StateFlow<Set<Int>> = _managedDisplayIds.asStateFlow()
 
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob() + exceptionHandler)
 
     private val daemonManager = ClientDaemonManager(context)
     private val daemonConnection = ClientDaemonConnection()
@@ -75,6 +80,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
         }
         if (!isShizukuAvailable()) {
             Log.e(TAG, "Shizuku not available")
+            _connectionError.value = "Shizuku 服务未运行或未授权"
             _connectionStatus.value = ConnectionStatus.ERROR
             return
         }
@@ -84,28 +90,35 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
 
         isBound = true
         scope.launch {
+            _connectionError.value = null
             _connectionStatus.value = ConnectionStatus.BINDING
 
+            val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
+            val port = prefs.getInt("server_port", 27183)
+
             val daemonStarted = withContext(Dispatchers.IO) {
-                daemonManager.startDaemon()
+                daemonManager.startDaemon(port)
             }
             if (!daemonStarted) {
                 Log.e(TAG, "Failed to start daemon")
+                _connectionError.value = "守护进程启动失败"
                 _connectionStatus.value = ConnectionStatus.ERROR
                 isBound = false
                 return@launch
             }
 
-            val connected = daemonConnection.connect(timeoutMs = 5000)
+            val connected = daemonConnection.connect(port = port, timeoutMs = 5000)
             if (!connected) {
                 Log.e(TAG, "Failed to connect to daemon socket")
                 daemonManager.stopDaemon()
+                _connectionError.value = "无法连接到守护进程"
                 _connectionStatus.value = ConnectionStatus.ERROR
                 isBound = false
                 return@launch
             }
 
             daemonConnection.startMessageLoop()
+            _connectionError.value = null
             _connectionStatus.value = ConnectionStatus.CONNECTED
             refreshManagedDisplays()
         }
@@ -123,6 +136,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
             stopDecoder()
             daemonConnection.disconnect()
             daemonManager.stopDaemon()
+            _connectionError.value = null
             _connectionStatus.value = ConnectionStatus.DISCONNECTED
             _managedDisplayIds.value = emptySet()
         }
@@ -133,14 +147,34 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
             val result = getActiveDisplayIds()
             result.onSuccess { ids ->
                 _managedDisplayIds.value = ids.toSet()
+            }.onFailure {
+                Log.w(TAG, "refreshManagedDisplays failed", it)
             }
         }
+    }
+
+    private suspend fun ensureConnected(): Boolean {
+        if (daemonConnection.isConnected()) {
+            return true
+        }
+        if (!isShizukuAvailable()) {
+            return false
+        }
+        val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
+        val port = prefs.getInt("server_port", 27183)
+        val connected = daemonConnection.connect(port = port, timeoutMs = 5000)
+        if (connected) {
+            daemonConnection.startMessageLoop()
+        }
+        return connected
     }
 
     override suspend fun createDisplay(name: String, width: Int, height: Int, dpi: Int, flags: Int): Result<Int> {
         return withContext(Dispatchers.IO) {
             runCatching {
+                ensureConnected()
                 val finalFlags = if (flags != 0) flags else buildDefaultFlags()
+                Log.d(TAG, "createDisplay: name=$name, width=$width, height=$height, dpi=$dpi, flags=0x${Integer.toHexString(finalFlags)}")
                 val sequence = CustomControlMessage.nextSequence()
                 val bytes = CustomControlMessage.createCreateVirtualDisplay(name, width, height, dpi, finalFlags, sequence)
                 val response = daemonConnection.sendAndAwait(bytes, sequence)
@@ -156,6 +190,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     override suspend fun releaseDisplay(displayId: Int): Result<Unit> {
         return withContext(Dispatchers.IO) {
             runCatching {
+                ensureConnected()
                 val sequence = CustomControlMessage.nextSequence()
                 val bytes = CustomControlMessage.createReleaseVirtualDisplay(displayId, sequence)
                 val response = daemonConnection.sendAndAwait(bytes, sequence)
@@ -173,21 +208,41 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
             runCatching {
                 decoderSurface = surface
                 if (surface != null) {
-                    if (currentStreamingDisplayId != displayId) {
+                    val isFirstTime = currentStreamingDisplayId != displayId
+                    if (isFirstTime) {
                         startStreamingToDisplay(displayId)
                     }
                     decoder?.setDisplaySurface(surface)
+                    if (!isFirstTime) {
+                        triggerScreenRefresh(displayId)
+                    }
                 } else {
-                    stopDecoder()
+                    decoder?.setDisplaySurface(null)
                 }
                 Unit
             }
         }
     }
 
+    private suspend fun triggerScreenRefresh(displayId: Int) {
+        if (daemonConnection.isConnected()) {
+            val sequence = CustomControlMessage.nextSequence()
+            val switchBytes = CustomControlMessage.createSwitchDisplay(displayId, sequence)
+            Log.d(TAG, "triggerScreenRefresh: sending switchDisplay($displayId) for refresh")
+            val response = daemonConnection.sendAndAwait(switchBytes, sequence)
+            if (response !is CustomDeviceMessage.GenericResponse || response.statusCode != 0) {
+                Log.w(TAG, "Trigger screen refresh switch display response not OK: $response")
+            } else {
+                Log.i(TAG, "Triggered screen refresh successfully for displayId $displayId")
+            }
+        }
+    }
+
     private suspend fun startStreamingToDisplay(displayId: Int) {
         if (!daemonConnection.isConnected()) {
-            val connected = daemonConnection.connect(timeoutMs = 5000)
+            val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
+            val port = prefs.getInt("server_port", 27183)
+            val connected = daemonConnection.connect(port = port, timeoutMs = 5000)
             if (!connected) {
                 throw IllegalStateException("Failed to connect to daemon")
             }
@@ -229,6 +284,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     override suspend fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Result<Unit> {
         return withContext(Dispatchers.IO) {
             runCatching {
+                ensureConnected()
                 val sequence = CustomControlMessage.nextSequence()
                 val bytes = CustomControlMessage.createResizeVirtualDisplay(displayId, width, height, dpi, sequence)
                 val response = daemonConnection.sendAndAwait(bytes, sequence)
@@ -246,6 +302,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     override suspend fun launchApp(packageName: String, displayId: Int): Result<Int> {
         return withContext(Dispatchers.IO) {
             runCatching {
+                ensureConnected()
                 val sequence = CustomControlMessage.nextSequence()
                 val bytes = CustomControlMessage.createStartActivity(packageName, displayId, sequence)
                 val response = daemonConnection.sendAndAwait(bytes, sequence)
@@ -262,27 +319,63 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     override suspend fun launchHome(displayId: Int): Result<Int> {
         return withContext(Dispatchers.IO) {
             runCatching {
-                val sequence = CustomControlMessage.nextSequence()
-                val bytes = CustomControlMessage.createStartActivity("com.android.launcher3", displayId, sequence)
-                val response = daemonConnection.sendAndAwait(bytes, sequence)
-                if (response is CustomDeviceMessage.GenericResponse) {
-                    if (response.statusCode >= 0) {
-                        response.statusCode
-                    } else {
-                        val sequence2 = CustomControlMessage.nextSequence()
-                        val launcherBytes = CustomControlMessage.createStartActivity("com.google.android.apps.nexuslauncher", displayId, sequence2)
-                        val fallbackResponse = daemonConnection.sendAndAwait(launcherBytes, sequence2)
-                        if (fallbackResponse is CustomDeviceMessage.GenericResponse && fallbackResponse.statusCode >= 0) {
-                            fallbackResponse.statusCode
-                        } else {
-                            throw IllegalStateException("Failed to launch home")
-                        }
+                ensureConnected()
+                val launcherPackages = resolveHomeLauncherPackages()
+                if (launcherPackages.isEmpty()) {
+                    throw IllegalStateException("No home launcher found on device")
+                }
+
+                var lastError: Throwable? = null
+                for (packageName in launcherPackages) {
+                    val sequence = CustomControlMessage.nextSequence()
+                    val bytes = CustomControlMessage.createStartActivity(packageName, displayId, sequence)
+                    val response = daemonConnection.sendAndAwait(bytes, sequence)
+                    if (response is CustomDeviceMessage.GenericResponse && response.statusCode >= 0) {
+                        Log.i(TAG, "Launch home via $packageName succeeded")
+                        return@runCatching response.statusCode
                     }
-                } else {
-                    throw IllegalStateException("Failed to launch home: $response")
+                    lastError = IllegalStateException("Launcher $packageName failed: $response")
+                    Log.w(TAG, "Launch home via $packageName failed, trying next")
+                }
+                throw lastError ?: IllegalStateException("Failed to launch home")
+            }
+        }
+    }
+
+    private fun resolveHomeLauncherPackages(): List<String> {
+        val pm = context.packageManager
+        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            addCategory(Intent.CATEGORY_DEFAULT)
+        }
+
+        val defaultLauncher = pm.resolveActivity(homeIntent, 0)?.activityInfo?.packageName
+        val candidates = mutableListOf<String>()
+        if (defaultLauncher != null) {
+            candidates.add(defaultLauncher)
+        }
+
+        val allHomeActivities = pm.queryIntentActivities(homeIntent, 0)
+        for (info in allHomeActivities) {
+            val pkg = info.activityInfo.packageName
+            if (pkg !in candidates) {
+                candidates.add(pkg)
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            val fallbackIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            val fallbackResolved = pm.queryIntentActivities(fallbackIntent, 0)
+            for (info in fallbackResolved) {
+                val pkg = info.activityInfo.packageName
+                if (pkg !in candidates) {
+                    candidates.add(pkg)
                 }
             }
         }
+
+        Log.d(TAG, "Resolved home launcher candidates: $candidates")
+        return candidates
     }
 
     override suspend fun injectInput(event: InputEvent): Result<Boolean> {
@@ -292,6 +385,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     override suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean> {
         return withContext(Dispatchers.IO) {
             runCatching {
+                ensureConnected()
                 val isKeyEvent = event is android.view.KeyEvent
                 val parcel = Parcel.obtain()
                 try {
@@ -319,12 +413,14 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     override suspend fun getActiveDisplayIds(): Result<IntArray> {
         return withContext(Dispatchers.IO) {
             runCatching {
+                ensureConnected()
                 val sequence = CustomControlMessage.nextSequence()
                 val bytes = CustomControlMessage.createGetActiveDisplayIds(sequence)
                 val response = daemonConnection.sendAndAwait(bytes, sequence)
                 if (response is CustomDeviceMessage.ActiveDisplaysResponse) {
                     response.displayIds
                 } else {
+                    Log.w(TAG, "getActiveDisplayIds: unexpected response type ${response?.javaClass?.simpleName}, returning empty list")
                     emptyArray<Int>().toIntArray()
                 }
             }
@@ -340,6 +436,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
             stopDecoder()
             daemonConnection.disconnect()
             daemonManager.stopDaemon()
+            _connectionError.value = null
             _connectionStatus.value = ConnectionStatus.IDLE
             _managedDisplayIds.value = emptySet()
         }
