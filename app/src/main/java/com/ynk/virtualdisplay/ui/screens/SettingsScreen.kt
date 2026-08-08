@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.edit
 import com.ynk.virtualdisplay.BuildConfig
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.ui.main.MainViewModel
@@ -90,7 +91,7 @@ fun SettingsScreen(
                             onClick = {
                                 ALL_DISPLAY_FLAGS.forEach { flag ->
                                     flagStates[flag.key] = flag.isDefaultEnabled
-                                    prefs.edit().putBoolean(flag.key, flag.isDefaultEnabled).apply()
+                                    prefs.edit { putBoolean(flag.key, flag.isDefaultEnabled) }
                                 }
                             },
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
@@ -122,7 +123,7 @@ fun SettingsScreen(
                                 checked = flagStates[flag.key] ?: flag.isDefaultEnabled,
                                 onCheckedChange = { isChecked ->
                                     flagStates[flag.key] = isChecked
-                                    prefs.edit().putBoolean(flag.key, isChecked).apply()
+                                    prefs.edit { putBoolean(flag.key, isChecked) }
                                 }
                             )
                             if (index < supportedFlags.lastIndex) {
@@ -163,8 +164,61 @@ fun SettingsScreen(
                     checked = captureBack,
                     onCheckedChange = { isChecked ->
                         captureBack = isChecked
-                        prefs.edit().putBoolean("capture_back", isChecked).apply()
+                        prefs.edit { putBoolean("capture_back", isChecked) }
                     }
+                )
+            }
+        }
+
+        // TCP 网络设置卡片
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "TCP 网络端口设置",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                var portText by remember {
+                    mutableStateOf(prefs.getInt("server_port", 27183).toString())
+                }
+
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = { newValue ->
+                        val filtered = newValue.filter { it.isDigit() }
+                        if (filtered.length <= 5) {
+                            portText = filtered
+                            val portNum = filtered.toIntOrNull() ?: 27183
+                            if (portNum in 1024..65535) {
+                                prefs.edit { putInt("server_port", portNum) }
+                            }
+                        }
+                    },
+                    label = { Text("服务基础端口 (1024-65535)") },
+                    placeholder = { Text("27183") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "更改端口需要重新启动服务生效。实际端口会基于该基础端口加上 scid 偏移。",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    lineHeight = 14.sp
                 )
             }
         }

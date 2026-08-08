@@ -14,6 +14,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.graphics.toColorInt
 import com.ynk.virtualdisplay.R
 
 /**
@@ -50,9 +51,9 @@ class DisplayControlPanel(
         // 极简毛玻璃感背景与精致细边框配色 (Color 0xD9121214 + 0.8dp 细微 0x22FFFFFF 边框)
         background = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            setColor(Color.parseColor("#D9121214"))
+            setColor("#D9121214".toColorInt())
             cornerRadius = 20f * density
-            setStroke((0.8f * density).toInt(), Color.parseColor("#22FFFFFF"))
+            setStroke((0.8f * density).toInt(), "#22FFFFFF".toColorInt())
         }
 
         layoutParams = FrameLayout.LayoutParams(
@@ -107,17 +108,17 @@ class DisplayControlPanel(
 
                 val backgroundDrawable = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
-                    setColor(Color.parseColor("#10FFFFFF"))
+                    setColor("#10FFFFFF".toColorInt())
                 }
                 background = backgroundDrawable
 
                 setOnTouchListener { v, event ->
                     when (event.action) {
                         MotionEvent.ACTION_DOWN -> {
-                            backgroundDrawable.setColor(Color.parseColor("#30FFFFFF"))
+                            backgroundDrawable.setColor("#30FFFFFF".toColorInt())
                         }
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                            backgroundDrawable.setColor(Color.parseColor("#10FFFFFF"))
+                            backgroundDrawable.setColor("#10FFFFFF".toColorInt())
                             if (event.action == MotionEvent.ACTION_UP) {
                                 onClick()
                             }
@@ -160,7 +161,7 @@ class DisplayControlPanel(
             ).apply {
                 setMargins(0, (5 * density).toInt(), 0, (5 * density).toInt())
             }
-            setBackgroundColor(Color.parseColor("#22FFFFFF"))
+            setBackgroundColor("#22FFFFFF".toColorInt())
         }
         buttonsContainer.addView(divider)
 

@@ -3,8 +3,6 @@ package com.ynk.virtualdisplay.ui.main
 import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
-import android.graphics.Point
-import android.util.DisplayMetrics
 import android.view.Display
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -15,6 +13,7 @@ import androidx.lifecycle.viewModelScope
 import com.ynk.virtualdisplay.data.model.ShizukuState
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
+import com.ynk.virtualdisplay.util.DisplayUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -64,6 +63,14 @@ class MainViewModel(
         }
         
         viewModelScope.launch {
+            repository.connectionError.collect { error ->
+                if (error != null) {
+                    _uiState.update { it.copy(statusMessage = "连接错误: $error") }
+                }
+            }
+        }
+        
+        viewModelScope.launch {
             repository.managedDisplayIds.collect { _ ->
                 refreshDisplays(appContext)
             }
@@ -77,30 +84,23 @@ class MainViewModel(
         }
     }
 
-    @Suppress("DEPRECATION")
+    private fun getDefaultDeviceSpec(context: Context): DisplayUtils.DisplaySpec {
+        return DisplayUtils.getDefaultDisplaySpec(context)
+            ?: DisplayUtils.DisplaySpec(1080, 1920, 420)
+    }
+
     fun reloadDefaultInputsFromSettings(context: Context) {
-        val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
-
-        val defaultDisplay = dm.getDisplay(Display.DEFAULT_DISPLAY)
-        val size = Point()
-        defaultDisplay?.getRealSize(size)
-        val metrics = DisplayMetrics()
-        defaultDisplay?.getRealMetrics(metrics)
-
+        val deviceSpec = getDefaultDeviceSpec(context)
         val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
         val defaultW = prefs.getString("pref_default_width", "") ?: ""
         val defaultH = prefs.getString("pref_default_height", "") ?: ""
         val defaultDpi = prefs.getString("pref_default_dpi", "") ?: ""
 
-        val w = defaultW.ifEmpty { size.x.toString() }
-        val h = defaultH.ifEmpty { size.y.toString() }
-        val dpi = defaultDpi.ifEmpty { metrics.densityDpi.toString() }
-
         _uiState.update { state ->
             state.copy(
-                inputWidth = w,
-                inputHeight = h,
-                inputDpi = dpi
+                inputWidth = defaultW.ifEmpty { deviceSpec.width.toString() },
+                inputHeight = defaultH.ifEmpty { deviceSpec.height.toString() },
+                inputDpi = defaultDpi.ifEmpty { deviceSpec.dpi.toString() }
             )
         }
     }
@@ -119,29 +119,18 @@ class MainViewModel(
         }
     }
 
-    @Suppress("DEPRECATION")
     private fun checkAndInitDeviceMetrics(context: Context) {
-        val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
-        val defaultDisplay = dm.getDisplay(Display.DEFAULT_DISPLAY)
-        val size = Point()
-        defaultDisplay?.getRealSize(size)
-        val metrics = DisplayMetrics()
-        defaultDisplay?.getRealMetrics(metrics)
-
+        val deviceSpec = getDefaultDeviceSpec(context)
         val prefs = context.getSharedPreferences("virtual_display_settings", Context.MODE_PRIVATE)
         val defaultW = prefs.getString("pref_default_width", "") ?: ""
         val defaultH = prefs.getString("pref_default_height", "") ?: ""
         val defaultDpi = prefs.getString("pref_default_dpi", "") ?: ""
 
-        val w = defaultW.ifEmpty { size.x.toString() }
-        val h = defaultH.ifEmpty { size.y.toString() }
-        val dpi = defaultDpi.ifEmpty { metrics.densityDpi.toString() }
-
         _uiState.update { state ->
             state.copy(
-                inputWidth = state.inputWidth.ifEmpty { w },
-                inputHeight = state.inputHeight.ifEmpty { h },
-                inputDpi = state.inputDpi.ifEmpty { dpi }
+                inputWidth = state.inputWidth.ifEmpty { defaultW.ifEmpty { deviceSpec.width.toString() } },
+                inputHeight = state.inputHeight.ifEmpty { defaultH.ifEmpty { deviceSpec.height.toString() } },
+                inputDpi = state.inputDpi.ifEmpty { defaultDpi.ifEmpty { deviceSpec.dpi.toString() } }
             )
         }
     }
@@ -234,15 +223,13 @@ class MainViewModel(
         
         dm.displays.forEach { display ->
             if (display.displayId != Display.DEFAULT_DISPLAY) {
-                val size = Point()
-                @Suppress("DEPRECATION")
-                display.getRealSize(size)
+                val spec = DisplayUtils.getVirtualDisplaySpec(display)
                 displaysList.add(
                     DisplayInfoModel(
                         id = display.displayId,
                         name = display.name,
-                        width = size.x,
-                        height = size.y
+                        width = spec.width,
+                        height = spec.height
                     )
                 )
                 if (repository.connectionStatus.value == ConnectionStatus.CONNECTED && display.displayId !in managedByService) {
@@ -273,8 +260,10 @@ class MainViewModel(
     }
 
     fun forceRestartService(context: Context) {
+        if (_uiState.value.isRestartCooldown) return
+
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "重启守护进程...") }
+            _uiState.update { it.copy(isLoading = true, isRestartCooldown = true, statusMessage = "重启守护进程...") }
             try {
                 repository.unbindService()
                 kotlinx.coroutines.delay(500)
@@ -283,6 +272,10 @@ class MainViewModel(
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Failed to restart service", e)
                 _uiState.update { it.copy(isLoading = false, statusMessage = "重启失败: ${e.message}") }
+            } finally {
+                // 重启结束后延迟 2 秒后解除冷却状态
+                kotlinx.coroutines.delay(2000)
+                _uiState.update { it.copy(isRestartCooldown = false) }
             }
         }
     }

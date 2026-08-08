@@ -122,11 +122,15 @@ fun VirtualDisplayScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(
                         onClick = { viewModel.forceRestartService(context) },
+                        enabled = !uiState.isRestartCooldown && !uiState.isLoading,
                         colors = ButtonDefaults.textButtonColors(
                             contentColor = MaterialTheme.colorScheme.error
                         )
                     ) {
-                        Text("重启服务", fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (uiState.isRestartCooldown) "冷却中..." else "重启服务",
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                     IconButton(
                         onClick = { viewModel.refreshDisplays(context) },

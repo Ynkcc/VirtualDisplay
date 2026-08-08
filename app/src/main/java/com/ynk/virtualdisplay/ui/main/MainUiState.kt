@@ -29,6 +29,7 @@ data class MainUiState(
     val statusMessage: String = "Ready",
     val isLoading: Boolean = false,
     val currentTab: ScreenTab = ScreenTab.CONSOLE,
+    val isRestartCooldown: Boolean = false,
     
     // 输入相关状态
     val inputWidth: String = "",

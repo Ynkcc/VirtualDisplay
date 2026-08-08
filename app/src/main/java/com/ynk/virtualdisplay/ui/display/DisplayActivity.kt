@@ -10,10 +10,8 @@ import android.view.inputmethod.InputConnectionWrapper
 import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.Matrix
-import android.graphics.Point
 import android.graphics.PointF
 import android.graphics.SurfaceTexture
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
@@ -35,6 +33,7 @@ import com.ynk.virtualdisplay.R
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.data.model.AppInfo
 import com.ynk.virtualdisplay.data.repository.RecentAppHelper
+import com.ynk.virtualdisplay.util.DisplayUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -92,27 +91,23 @@ class DisplayActivity : ComponentActivity() {
     private fun updateDisplayInfo(displayId: Int) {
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.getDisplay(displayId)?.let { display ->
-            val size = Point()
-            @Suppress("DEPRECATION")
-            display.getRealSize(size)
-            if (vdWidth != size.x || vdHeight != size.y) {
-                Log.d(TAG, "Virtual Display #$displayId Size Changed: ${size.x}x${size.y}")
-                vdWidth = size.x
-                vdHeight = size.y
+            val spec = DisplayUtils.getVirtualDisplaySpec(display)
+            val width = spec.width
+            val height = spec.height
+            if (vdWidth != width || vdHeight != height) {
+                Log.d(TAG, "Virtual Display #$displayId Size Changed: ${width}x${height}")
+                vdWidth = width
+                vdHeight = height
                 textureView.surfaceTexture?.let { texture ->
                     texture.setDefaultBufferSize(vdWidth, vdHeight)
                 }
                 updateSurfaceLayout()
 
-                // 当虚拟屏幕内尺寸或旋转发生变更时，防抖同步调整底层的物理分辨率，避免画面截断拉伸及频繁 resize 引起画面闪烁
-                val metrics = android.util.DisplayMetrics()
-                @Suppress("DEPRECATION")
-                display.getRealMetrics(metrics)
-                val dpi = metrics.densityDpi
+                val dpi = spec.dpi
                 resizeJob?.cancel()
                 resizeJob = lifecycleScope.launch {
                     kotlinx.coroutines.delay(250)
-                    repository.resizeDisplay(displayId, size.x, size.y, dpi)
+                    repository.resizeDisplay(displayId, width, height, dpi)
                 }
             }
         }
@@ -275,16 +270,15 @@ class DisplayActivity : ComponentActivity() {
             bitmap.recycle()
             allBlack
         } catch (e: Exception) {
+            Log.w(TAG, "checkIsFrameBlack failed", e)
             null
         }
     }
 
     private lateinit var forwardingEditText: ForwardingEditText
 
-    @Suppress("DEPRECATION")
     private fun enterFullscreen() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.statusBarColor = Color.TRANSPARENT
         WindowInsetsControllerCompat(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.statusBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -431,7 +425,7 @@ class DisplayActivity : ComponentActivity() {
             Log.d(TAG, "Keyboard hidden and focus cleared")
         } else {
             forwardingEditText.requestFocus()
-            imm.showSoftInput(forwardingEditText, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+            imm.showSoftInput(forwardingEditText, 0)
             Log.d(TAG, "Keyboard shown and requested focus")
         }
     }
@@ -670,6 +664,7 @@ class DisplayActivity : ComponentActivity() {
         }
     }
 
+    @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
             val prefs = getSharedPreferences("virtual_display_settings", MODE_PRIVATE)
