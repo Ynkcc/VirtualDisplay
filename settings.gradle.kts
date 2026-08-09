@@ -24,3 +24,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "My Application"
 include(":app")
+include(":scrcpy-server")
+project(":scrcpy-server").projectDir = file("scrcpy/server")

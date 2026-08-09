@@ -39,6 +39,7 @@ object AppSettings {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     val serverPortKey = intPreferencesKey("server_port")
+    val serverHostKey = stringPreferencesKey("server_host")
     val captureBackKey = booleanPreferencesKey("capture_back")
     val recentAppsKey = stringPreferencesKey("recent_apps")
     val prefDefaultWidthKey = stringPreferencesKey("pref_default_width")
@@ -75,6 +76,20 @@ object AppSettings {
 
     suspend fun setServerPort(context: Context, port: Int) {
         context.applicationContext.dataStore.edit { it[serverPortKey] = port }
+    }
+
+    fun serverHostFlow(context: Context): Flow<String> {
+        return context.applicationContext.dataStore.data.map { prefs ->
+            prefs[serverHostKey] ?: "127.0.0.1"
+        }
+    }
+
+    suspend fun getServerHost(context: Context): String {
+        return context.applicationContext.dataStore.data.first()[serverHostKey] ?: "127.0.0.1"
+    }
+
+    suspend fun setServerHost(context: Context, host: String) {
+        context.applicationContext.dataStore.edit { it[serverHostKey] = host }
     }
 
     fun captureBackFlow(context: Context): Flow<Boolean> {

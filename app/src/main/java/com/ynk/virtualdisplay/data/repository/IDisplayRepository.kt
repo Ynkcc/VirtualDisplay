@@ -36,6 +36,8 @@ interface IDisplayRepository {
      */
     val managedDisplayIds: StateFlow<Set<Int>>
 
+
+
     /**
      * 当前守护进程的 PID
      */
@@ -120,6 +122,11 @@ interface IDisplayRepository {
      * 设置性能统计回调
      */
     fun setPerformanceStatsCallback(callback: ((String) -> Unit)?)
+
+    /**
+     * 主动向守护进程拉取并同步当前管理的显示器列表 (缓存)
+     */
+    fun refreshDisplays()
 }
 
 /**

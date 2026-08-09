@@ -217,7 +217,7 @@ fun SettingsScreen(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "更改端口需要重新启动服务生效。实际端口会基于该基础端口加上 scid 偏移。",
+                    text = "更改端口需要重新启动服务生效。",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     lineHeight = 14.sp

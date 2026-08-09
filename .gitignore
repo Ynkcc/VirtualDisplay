@@ -12,3 +12,5 @@ local.properties
 /release.keystore
 refs/
 /.trae/
+__pycache__/
+*.pyc
