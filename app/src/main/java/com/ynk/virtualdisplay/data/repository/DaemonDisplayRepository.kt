@@ -1,18 +1,17 @@
 package com.ynk.virtualdisplay.data.repository
 
 import android.content.Context
-import android.content.Intent
 import android.hardware.display.DisplayManager
-import android.os.Bundle
 import android.os.Parcel
 import android.util.Log
 import android.view.InputEvent
 import android.view.Surface
-import com.ynk.virtualdisplay.data.AppSettings
-import com.ynk.virtualdisplay.data.model.ALL_DISPLAY_FLAGS
+import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
+import com.ynk.virtualdisplay.data.process.DaemonProcessDataSource
+import com.ynk.virtualdisplay.data.remote.DaemonRemoteDataSource
+import com.ynk.virtualdisplay.data.system.LauncherDataSource
+import com.ynk.virtualdisplay.manager.ShizukuManager
 import com.ynk.virtualdisplay.net.DaemonTransport
-import com.ynk.virtualdisplay.process.DaemonProcessController
-import com.ynk.virtualdisplay.rpc.DaemonControlApiImpl
 import com.ynk.virtualdisplay.rpc.DaemonRpc
 import com.ynk.virtualdisplay.util.ExceptionUtils
 import com.ynk.virtualdisplay.video.VideoStreamController
@@ -21,7 +20,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,9 +27,38 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import rikka.shizuku.Shizuku
 
-class DaemonDisplayRepository(private val context: Context) : IDisplayRepository {
+/**
+ * 显示器仓库实现：协调 4 个 DataSource + 传输/视频流组件，完成虚拟显示器的管理。
+ *
+ * 数据源拆分（严格遵循方案二分层）：
+ * - [settingsDataSource]   → 本地配置读写（AppSettings / DataStore）
+ * - [remoteDataSource]     → 远程 RPC 调用（Daemon 控制命令）
+ * - [launcherDataSource]   → 系统服务查询（Launcher 列表 / DisplayManager）
+ * - [processDataSource]    → 守护进程生命周期控制（启动/停止/查 PID）
+ *
+ * 仍直接持有的状态性组件（不属于"纯数据"DataSource 职责）：
+ * - [transport]            → TCP 连接/重连/握手状态
+ * - [rpc]                  → RPC 消息循环线程
+ * - [videoController]      → 视频解码器/Surface 状态管理
+ * - [shizukuManager]       → Shizuku 权限状态检测
+ *
+ * 业务规则（比例校验、默认 Flags 计算等）已抽离到
+ * [com.ynk.virtualdisplay.domain.DisplayInteractor]，此处仅做数据编排。
+ */
+class DaemonDisplayRepository(
+    private val context: Context,
+    private val settingsDataSource: AppSettingsDataSource,
+    private val remoteDataSource: DaemonRemoteDataSource,
+    private val launcherDataSource: LauncherDataSource,
+    private val processDataSource: DaemonProcessDataSource,
+    private val transport: DaemonTransport,
+    private val rpc: DaemonRpc,
+    private val videoController: VideoStreamController,
+    private val shizukuManager: ShizukuManager,
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob() +
+            ExceptionUtils.coroutineExceptionHandler("DaemonDisplayRepository"))
+) : IDisplayRepository {
 
     companion object {
         private const val TAG = "DaemonDisplayRepository"
@@ -39,16 +66,6 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
         private const val DEFAULT_HEIGHT = 1080
         private const val DEFAULT_DPI = 320
     }
-
-    private val exceptionHandler = ExceptionUtils.coroutineExceptionHandler(TAG)
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob() + exceptionHandler)
-
-    private val processController = DaemonProcessController(context)
-    private val transport = DaemonTransport()
-    private val rpc = DaemonRpc(transport)
-    private val controlApi = DaemonControlApiImpl(rpc)
-    private val videoController = VideoStreamController(controlApi, transport, scope)
-
 
     private val _connectionStatus = MutableStateFlow(ConnectionStatus.IDLE)
     override val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus.asStateFlow()
@@ -83,39 +100,37 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
     }
 
     private val displayListener = object : DisplayManager.DisplayListener {
-        override fun onDisplayAdded(displayId: Int) {
-            refreshManagedDisplays()
-        }
-        override fun onDisplayRemoved(displayId: Int) {
-            refreshManagedDisplays()
-        }
-        override fun onDisplayChanged(displayId: Int) {
-            refreshManagedDisplays()
-        }
+        override fun onDisplayAdded(displayId: Int) { refreshManagedDisplays() }
+        override fun onDisplayRemoved(displayId: Int) { refreshManagedDisplays() }
+        override fun onDisplayChanged(displayId: Int) { refreshManagedDisplays() }
     }
 
-    override fun bindService(context: Context) {
+    override fun bindService() {
         if (isBound) {
             Log.d(TAG, "Already bound, skipping bindService")
             return
         }
         isBound = true
-        val dm = context.applicationContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        dm.registerDisplayListener(displayListener, null)
+        // 通过 LauncherDataSource（System 数据源）管理 DisplayListener
+        launcherDataSource.registerDisplayListener(displayListener)
 
         scope.launch {
             try {
                 _connectionStatus.value = ConnectionStatus.BINDING
-                val port = AppSettings.getServerPort(context)
-                val host = AppSettings.getServerHost(context)
-                if (!isShizukuAvailable()) {
+
+                // 读取连接配置 → Local DataSource
+                val port = settingsDataSource.getServerPort()
+                val host = settingsDataSource.getServerHost()
+
+                if (!shizukuManager.isAvailable()) {
                     _connectionError.value = "Shizuku is not available"
                     _connectionStatus.value = ConnectionStatus.ERROR
                     return@launch
                 }
-                
+
+                // 启动守护进程 → Process DataSource
                 val started = withContext(Dispatchers.IO) {
-                    processController.startDaemon(port, host)
+                    processDataSource.startDaemon(port, host)
                 }
                 if (!started) {
                     _connectionError.value = "Failed to start daemon process"
@@ -123,7 +138,7 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
                     return@launch
                 }
 
-                _daemonPid.value = withContext(Dispatchers.IO) { processController.getDaemonPid() }
+                _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
 
                 val connected = transport.connect(host, port, 5000)
                 if (connected) {
@@ -149,29 +164,21 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
             return
         }
         isBound = false
-        val dm = context.applicationContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        dm.unregisterDisplayListener(displayListener)
-
+        launcherDataSource.unregisterDisplayListener(displayListener)
         launchCleanupOnce()
     }
 
     private suspend fun performCleanup() {
+        try { videoController.stop() } catch (e: Exception) { Log.w(TAG, "Failed to stop video streaming", e) }
         try {
-            videoController.stop()
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to stop video streaming", e)
-        }
-        try {
-            controlApi.exitDaemon()
+            // exitDaemon → Remote DataSource
+            remoteDataSource.exitDaemon()
             kotlinx.coroutines.delay(100)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to send exit command", e)
-        }
+        } catch (e: Exception) { Log.w(TAG, "Failed to send exit command", e) }
         rpc.stopMessageLoop()
         transport.disconnect()
-        withContext(Dispatchers.IO) {
-            processController.stopDaemon()
-        }
+        // 停止守护进程 → Process DataSource
+        withContext(Dispatchers.IO) { processDataSource.stopDaemon() }
         _daemonPid.value = -1
         _connectionError.value = null
         _connectionStatus.value = ConnectionStatus.DISCONNECTED
@@ -181,11 +188,9 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
 
     private fun refreshManagedDisplays() {
         scope.launch {
-            // getDaemonPid() may spawn a blocking shell pgrep on cache miss; keep it
-            // off the Main dispatcher. After startDaemon() the cached pid is returned
-            // without any shell call.
-            _daemonPid.value = withContext(Dispatchers.IO) { processController.getDaemonPid() }
-            val result = controlApi.getActiveDisplayIds()
+            _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
+            // 获取显示器列表 → Remote DataSource
+            val result = remoteDataSource.getActiveDisplayIds()
             result.onSuccess { ids ->
                 _managedDisplayIds.value = ids.toSet()
             }.onFailure {
@@ -196,17 +201,17 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
     }
 
     override suspend fun createDisplay(name: String, width: Int, height: Int, dpi: Int, flags: Int): Result<Int> {
-        val finalFlags = if (flags != 0) flags else buildDefaultFlags()
+        val finalFlags = if (flags != 0) flags else 0
         Log.d(TAG, "createDisplay: name=$name, width=$width, height=$height, dpi=$dpi, flags=0x${Integer.toHexString(finalFlags)}")
-        val result = controlApi.createDisplay(name, width, height, dpi, finalFlags)
-        result.onSuccess {
-            refreshManagedDisplays()
-        }
+        // 创建显示器 → Remote DataSource
+        val result = remoteDataSource.createDisplay(name, width, height, dpi, finalFlags)
+        result.onSuccess { refreshManagedDisplays() }
         return result
     }
 
     override suspend fun releaseDisplay(displayId: Int): Result<Unit> {
-        val result = controlApi.releaseDisplay(displayId)
+        // 释放显示器 → Remote DataSource
+        val result = remoteDataSource.releaseDisplay(displayId)
         result.onSuccess {
             if (currentStreamingDisplayId == displayId) {
                 videoController.stop(force = true)
@@ -234,19 +239,16 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
 
     private suspend fun startStreamingToDisplay(displayId: Int) {
         if (currentStreamingDisplayId == displayId) return
-
-        // 停止之前的流
         if (currentStreamingDisplayId != -1) {
             videoController.stop()
         }
-
         videoController.start(displayId, decoderSurface, DEFAULT_WIDTH, DEFAULT_HEIGHT)
-        // 仅在 start 成功后才登记当前流目标，避免抛异常后状态不一致
         currentStreamingDisplayId = displayId
     }
 
     override suspend fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Result<Unit> {
-        val result = controlApi.resizeDisplay(displayId, width, height, dpi)
+        // 调整尺寸 → Remote DataSource
+        val result = remoteDataSource.resizeDisplay(displayId, width, height, dpi)
         result.onSuccess {
             if (currentStreamingDisplayId == displayId) {
                 videoController.updateResolution(width, height)
@@ -256,22 +258,22 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
     }
 
     override suspend fun launchApp(packageName: String, displayId: Int): Result<Int> {
-        val result = controlApi.startActivity(packageName, displayId)
-        result.onSuccess {
-            RecentAppHelper.addRecentApp(context, packageName)
-        }
+        // 启动应用 → Remote DataSource
+        val result = remoteDataSource.startActivity(packageName, displayId)
+        // 最近应用写入 → Local DataSource
+        result.onSuccess { settingsDataSource.addRecentApp(packageName) }
         return result
     }
 
     override suspend fun launchHome(displayId: Int): Result<Int> {
-        val launcherPackages = resolveHomeLauncherPackages()
+        // Launcher 列表 → System DataSource
+        val launcherPackages = launcherDataSource.resolveHomeLauncherPackages()
         if (launcherPackages.isEmpty()) {
             return Result.failure(IllegalStateException("No home launcher found on device"))
         }
-
         var lastError: Throwable? = null
         for (packageName in launcherPackages) {
-            val result = controlApi.startActivity(packageName, displayId)
+            val result = remoteDataSource.startActivity(packageName, displayId)
             result.onSuccess {
                 Log.i(TAG, "Launch home via $packageName succeeded")
                 return result
@@ -280,40 +282,6 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
             Log.w(TAG, "Launch home via $packageName failed, trying next", lastError)
         }
         return Result.failure(lastError ?: IllegalStateException("Failed to launch home"))
-    }
-
-    private fun resolveHomeLauncherPackages(): List<String> {
-        val pm = context.packageManager
-        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
-            addCategory(Intent.CATEGORY_HOME)
-            addCategory(Intent.CATEGORY_DEFAULT)
-        }
-
-        val defaultLauncher = pm.resolveActivity(homeIntent, 0)?.activityInfo?.packageName
-        val candidates = mutableListOf<String>()
-        if (defaultLauncher != null) {
-            candidates.add(defaultLauncher)
-        }
-
-        val allHomeActivities = pm.queryIntentActivities(homeIntent, 0)
-        for (info in allHomeActivities) {
-            val pkg = info.activityInfo.packageName
-            if (pkg !in candidates) {
-                candidates.add(pkg)
-            }
-        }
-
-        if (candidates.isEmpty()) {
-            val fallbackIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-            val fallbackResolved = pm.queryIntentActivities(fallbackIntent, 0)
-            for (info in fallbackResolved) {
-                val pkg = info.activityInfo.packageName
-                if (pkg !in candidates) {
-                    candidates.add(pkg)
-                }
-            }
-        }
-        return candidates
     }
 
     override suspend fun injectInput(event: InputEvent): Result<Boolean> {
@@ -326,7 +294,8 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
         return try {
             event.writeToParcel(parcel, 0)
             val parcelBytes = parcel.marshall()
-            controlApi.injectInput(displayId, isKeyEvent, parcelBytes)
+            // 输入注入 → Remote DataSource
+            remoteDataSource.injectInput(displayId, isKeyEvent, parcelBytes)
         } finally {
             parcel.recycle()
         }
@@ -341,19 +310,9 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
         return Result.success(_managedDisplayIds.value.toIntArray())
     }
 
-    override fun isShizukuAvailable(): Boolean {
-        return try { Shizuku.pingBinder() } catch (e: Throwable) { false }
-    }
-
     override fun destroyService() {
         isBound = false
-        val dm = context.applicationContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        dm.unregisterDisplayListener(displayListener)
-        // JOIN the in-flight cleanup launched by unbindService (if any) instead
-        // of cancelling it — cancelling mid-cleanup (mid videoController.stop /
-        // transport.disconnect / stopDaemon) would leak sockets/processes, the
-        // exact failure the runBlocking path was meant to prevent. If no
-        // cleanup is running yet, launchCleanupOnce starts one and we join it.
+        launcherDataSource.unregisterDisplayListener(displayListener)
         val job = launchCleanupOnce()
         runCatching {
             runBlocking {
@@ -373,19 +332,5 @@ class DaemonDisplayRepository(private val context: Context) : IDisplayRepository
 
     override fun refreshDisplays() {
         refreshManagedDisplays()
-    }
-
-    private suspend fun buildDefaultFlags(): Int {
-        val flagValues = AppSettings.getFlags(context)
-        var flagsSum = 0
-        ALL_DISPLAY_FLAGS.forEach { flag ->
-            if (flag.minSdk <= android.os.Build.VERSION.SDK_INT) {
-                val isEnabled = flagValues[flag.key] ?: flag.isDefaultEnabled
-                if (isEnabled) {
-                    flagsSum = flagsSum or flag.bitValue
-                }
-            }
-        }
-        return flagsSum
     }
 }

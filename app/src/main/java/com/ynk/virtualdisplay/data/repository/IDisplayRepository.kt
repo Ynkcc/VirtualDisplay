@@ -19,116 +19,74 @@ enum class ConnectionStatus {
 
 /**
  * 显示器管理核心仓库接口
+ *
+ * 职责：统一数据入口，屏蔽数据源差异。
+ * 业务逻辑由 [com.ynk.virtualdisplay.domain.DisplayInteractor] 编排，
+ * 系统服务由 [com.ynk.virtualdisplay.manager] 层管理。
  */
 interface IDisplayRepository {
     companion object {
         const val REQUEST_CODE = 20260
     }
-    /**
-     * 连接状态流
-     */
+
+    /** 连接状态流 */
     val connectionStatus: StateFlow<ConnectionStatus>
 
-    /**
-     * 连接错误消息流 (当 connectionStatus == ERROR 时携带错误详情)
-     */
+    /** 连接错误消息流 (当 connectionStatus == ERROR 时携带错误详情) */
     val connectionError: StateFlow<String?>
 
-    /**
-     * 当前管理中的显示器 ID 列表
-     */
+    /** 当前管理中的显示器 ID 列表 */
     val managedDisplayIds: StateFlow<Set<Int>>
 
-
-
-    /**
-     * 当前守护进程的 PID
-     */
+    /** 当前守护进程的 PID */
     val daemonPid: StateFlow<Int>
 
-    /**
-     * 绑定并初始化 Shizuku 服务
-     */
-    fun bindService(context: Context)
+    /** 绑定并初始化守护进程服务 */
+    fun bindService()
 
-    /**
-     * 解绑服务
-     */
+    /** 解绑服务 */
     fun unbindService()
 
-    /**
-     * 创建虚拟显示器 (挂起函数)
-     */
+    /** 创建虚拟显示器 */
     suspend fun createDisplay(name: String, width: Int, height: Int, dpi: Int, flags: Int = 0): Result<Int>
 
-    /**
-     * 释放指定显示器 (挂起函数)
-     */
+    /** 释放指定显示器 */
     suspend fun releaseDisplay(displayId: Int): Result<Unit>
 
-    /**
-     * 设置显示器 Surface (挂起函数) — 驱动客户端 H264 解码器
-     */
+    /** 设置显示器 Surface — 驱动客户端 H264 解码器 */
     suspend fun setDisplaySurface(displayId: Int, surface: Surface?): Result<Unit>
 
-    /**
-     * 重新调整指定虚拟显示器的物理尺寸和 DPI (挂起函数)
-     */
+    /** 重新调整指定虚拟显示器的物理尺寸和 DPI */
     suspend fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Result<Unit>
 
-    /**
-     * 在指定显示器启动应用 (挂起函数)
-     */
+    /** 在指定显示器启动应用 */
     suspend fun launchApp(packageName: String, displayId: Int): Result<Int>
 
-    /**
-     * 在指定显示器启动主屏幕/Launcher (挂起函数)
-     */
+    /** 在指定显示器启动主屏幕/Launcher */
     suspend fun launchHome(displayId: Int): Result<Int>
 
-    /**
-     * 注入输入事件 (挂起函数)
-     */
+    /** 注入输入事件 */
     suspend fun injectInput(event: InputEvent): Result<Boolean>
 
-    /**
-     * 注入带 DisplayId 的输入事件 (挂起函数)
-     */
+    /** 注入带 DisplayId 的输入事件 */
     suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean>
 
-    /**
-     * 切换当前镜像的显示器目标 (挂起函数)
-     */
+    /** 切换当前镜像的显示器目标 */
     suspend fun switchDisplay(displayId: Int): Result<Unit>
 
-    /**
-     * 获取当前 Daemon 中的活动显示器 ID 列表
-     */
+    /** 获取当前 Daemon 中的活动显示器 ID 列表 */
     suspend fun getActiveDisplayIds(): Result<IntArray>
 
-    /**
-     * 判断 Shizuku 是否可用
-     */
-    fun isShizukuAvailable(): Boolean
-
-    /**
-     * 销毁远程特权服务
-     */
+    /** 销毁远程特权服务 */
     fun destroyService()
 
-    /**
-     * 设置视频配置回调
-     */
+    /** 设置视频配置回调 */
     fun setVideoConfigCallback(callback: ((width: Int, height: Int) -> Unit)?)
 
-    /**
-     * 设置性能统计回调
-     */
+    /** 设置性能统计回调 */
     fun setPerformanceStatsCallback(callback: ((String) -> Unit)?)
 
-    /**
-     * 主动向守护进程拉取并同步当前管理的显示器列表 (缓存)
-     */
+    /** 主动向守护进程拉取并同步当前管理的显示器列表 (缓存) */
     fun refreshDisplays()
 }
 
@@ -146,4 +104,3 @@ object RecentAppHelper {
         AppSettings.addRecentApp(context, packageName, MAX_LIMIT)
     }
 }
-
