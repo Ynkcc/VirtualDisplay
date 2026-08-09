@@ -6,8 +6,6 @@
 
 import os
 import time
-import pytest
-from client.control_client import ControlClient
 from client.video_client import VideoClient
 
 
@@ -33,7 +31,7 @@ def test_multi_client_video_stream(new_client_factory, daemon_config):
 
     # 2. 创建虚拟显示器
     vd_name = "TestDisplay_MultiClient"
-    status, vd_id = -1, None
+    vd_id = None
     try:
         resp_vd = client0.create_virtual_display(name=vd_name, width=1280, height=720, dpi=240, flags=0)
         assert resp_vd["status_code"] == 0, f"创建虚拟显示器失败: {resp_vd.get('msg')}"
@@ -109,6 +107,16 @@ def test_multi_client_video_stream(new_client_factory, daemon_config):
 
         assert os.path.exists(png_main) and os.path.getsize(png_main) > 0, "主显示器截图文件不存在或为空"
         assert os.path.exists(png_vd) and os.path.getsize(png_vd) > 0, "虚拟显示器截图文件不存在或为空"
+
+        # 10. 断言两张截图内容不同（主屏幕显示 Settings，虚拟屏幕显示 Calculator）
+        #    防止 B1 bug（display_id 参数格式错误）导致视频流捕获到同一屏幕
+        differ = VideoClient.images_differ(png_main, png_vd)
+        assert differ, (
+            f"主显示器和虚拟显示器 {vd_id} 的截图内容相同，可能捕获到了同一屏幕 "
+            f"(main_mean={VideoClient.mean_rgb(png_main)}, vd_mean={VideoClient.mean_rgb(png_vd)})"
+        )
+        print(f"[多客户端测试] 内容差异验证通过: main_mean={VideoClient.mean_rgb(png_main)}, "
+              f"vd_mean={VideoClient.mean_rgb(png_vd)}")
 
         print(f"[多客户端测试] 截图已成功导出：\n  - 主显示器: {png_main}\n  - 虚拟显示器: {png_vd}")
 

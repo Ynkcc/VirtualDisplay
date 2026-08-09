@@ -109,7 +109,7 @@ def device_env(daemon_config):
         f"nohup app_process / com.genymobile.scrcpy.Server 4.1 "
         f"tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false "
         f"send_stream_meta=false send_frame_meta=true cleanup=false "
-        f"--daemon --port={port} --bind_address={bind_address} "
+        f"daemon=true daemon_port={port} daemon_bind_address={bind_address} "
         f">/data/local/tmp/scrcpy-server.log 2>&1 &'"
     )
     subprocess.run(["adb", "shell", cmd], capture_output=True)

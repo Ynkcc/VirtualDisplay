@@ -25,7 +25,7 @@ class ClientDaemonManager(private val context: Context) {
 
     private fun findDaemonPid(port: Int): Int {
         return try {
-            val script = "for pid in \$(pgrep -f [c]om.genymobile.scrcpy.Server); do if cat /proc/\$pid/cmdline | grep -q \"port=$port\"; then echo \$pid; break; fi; done"
+            val script = "for pid in \$(pgrep -f [c]om.genymobile.scrcpy.Server); do if cat /proc/\$pid/cmdline | grep -q \"daemon_port=$port\"; then echo \$pid; break; fi; done"
             val proc = invokeNewProcess(arrayOf("sh", "-c", script), null, null)
             if (proc != null) {
                 val output = proc.inputStream.bufferedReader().use { it.readText() }.trim()
@@ -76,7 +76,7 @@ class ClientDaemonManager(private val context: Context) {
             val cmd = arrayOf(
                 "sh",
                 "-c",
-                "nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false --daemon --port=$port --bind_address=$address >/dev/null 2>&1 &"
+                "nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false daemon=true daemon_port=$port daemon_bind_address=$address >/dev/null 2>&1 &"
             )
 
             val classpath = context.packageCodePath + ":" + context.applicationInfo.sourceDir

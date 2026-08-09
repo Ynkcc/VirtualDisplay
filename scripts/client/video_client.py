@@ -147,10 +147,35 @@ class VideoClient:
 
         return os.path.exists(output_path) and os.path.getsize(output_path) > 0
 
+    def _probe_video_size(self, raw_stream_path: str):
+        """
+        使用 ffprobe 从 H.264 原始流中探测实际视频分辨率。
+
+        当 send_stream_meta=false 时，视频流中不包含 session meta 帧，
+        无法从包头解析宽高，必须通过 ffprobe 解析 SPS/PPS 获取。
+        返回 (width, height) 或 None。
+        """
+        try:
+            cmd = [
+                'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'stream=width,height', '-of', 'csv=p=0',
+                '-f', 'h264', raw_stream_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                parts = result.stdout.strip().split(',')
+                if len(parts) == 2:
+                    w, h = int(parts[0]), int(parts[1])
+                    if w > 0 and h > 0:
+                        return w, h
+        except Exception:
+            pass
+        return None
+
     def take_screenshot(self, raw_stream_path: str, output_png: str) -> bool:
         """
         使用 FFmpeg 解码 raw_stream_path 第一帧并保存为 output_png。
-        
+
         如果没有 Pillow/numpy，会使用 FFmpeg 直接转码。
         如果有，则配合 numpy/Pillow 确保对图片数据进行合理的处理和验证。
         """
@@ -174,12 +199,19 @@ class VideoClient:
             try:
                 import numpy as np
                 from PIL import Image
-                
+
+                # 优先使用 ffprobe 探测实际分辨率（send_stream_meta=false 时唯一可靠来源），
+                # 其次用 session meta 解析到的 self.width/self.height，
+                # 最后退化为 1280x720。
                 w, h = self.width, self.height
                 if w == 0 or h == 0:
-                    # 如果没有抓取到分辨率，尝试用外部命令行获取或给默认值
-                    w, h = 1280, 720
-                
+                    probed = self._probe_video_size(raw_stream_path)
+                    if probed:
+                        w, h = probed
+                        self.width, self.height = w, h
+                    else:
+                        w, h = 1280, 720
+
                 with open(yuv_path, 'rb') as f:
                     yuv_bytes = f.read()
 
@@ -236,3 +268,36 @@ class VideoClient:
             except Exception:
                 pass
             self.sock = None
+
+    @staticmethod
+    def images_differ(path_a: str, path_b: str, threshold: float = 12.0) -> bool:
+        """
+        将两张 PNG 缩放到 32x32 后比较平均绝对像素差，超过 threshold 视为内容不同。
+
+        用于校验两个屏幕的视频流确实捕获了不同内容（防止错误地捕获到同一屏幕）。
+        跨分辨率安全：缩放到统一尺寸后再比较。
+        """
+        try:
+            import numpy as np
+            from PIL import Image
+        except ImportError:
+            # 无 numpy/Pillow 时退化为文件哈希比较：不同则视为不同
+            import hashlib
+            ha = hashlib.md5(open(path_a, 'rb').read()).hexdigest()
+            hb = hashlib.md5(open(path_b, 'rb').read()).hexdigest()
+            return ha != hb
+
+        a = np.asarray(Image.open(path_a).convert('RGB').resize((32, 32)), dtype=np.float32)
+        b = np.asarray(Image.open(path_b).convert('RGB').resize((32, 32)), dtype=np.float32)
+        return float(np.abs(a - b).mean()) > threshold
+
+    @staticmethod
+    def mean_rgb(png_path: str):
+        """返回 PNG 的平均 (R, G, B)，用于诊断日志。"""
+        try:
+            import numpy as np
+            from PIL import Image
+            arr = np.asarray(Image.open(png_path).convert('RGB'), dtype=np.float32)
+            return tuple(round(float(v), 1) for v in arr.reshape(-1, 3).mean(axis=0))
+        except Exception:
+            return None

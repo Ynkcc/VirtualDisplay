@@ -43,13 +43,21 @@ Daemon 模式采用多客户端 TCP 服务器架构，支持多个客户端同�
 
 ### 端口配置
 
-通过 `DaemonOptions` 配置：
+通过命令行参数配置（与 scrcpy 原生参数一致，均采用 `key=value` 形式）：
 
-| 参数         | 默认值   | 说明                       |
-| ------------ | -------- | -------------------------- |
-| `port`       | 27183    | TCP 监听端口               |
-| `bindAddress`| 127.0.0.1 | 绑定地址                    |
-| `daemonMode` | false    | 是否以 daemon 模式运行     |
+| 参数                  | 默认值    | 说明                       |
+| --------------------- | --------- | -------------------------- |
+| `daemon`              | false     | 是否以 daemon 模式运行     |
+| `daemon_port`         | 27183     | TCP 监听端口               |
+| `daemon_bind_address` | 127.0.0.1 | 绑定地址                   |
+
+启动示例：
+
+```
+app_process / com.genymobile.scrcpy.Server 4.1 \
+    tunnel_forward=true audio=false send_frame_meta=true cleanup=false \
+    daemon=true daemon_port=27183 daemon_bind_address=127.0.0.1
+```
 
 ## 传输协议
 
@@ -372,11 +380,11 @@ flowchart TB
 | 客户端协议     | [CustomControlMessage.kt](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/app/src/main/java/com/ynk/virtualdisplay/protocol/CustomControlMessage.kt) |
 | 命令解析       | [ControlMessageReader.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageReader.java) |
 | 响应序列化     | [DeviceMessageWriter.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/control/DeviceMessageWriter.java) |
-| 命令分发       | [DaemonCommandHandler.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/control/DaemonCommandHandler.java) |
+| 命令分发       | [DaemonCommandHandler.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/daemon/control/DaemonCommandHandler.java) |
 | 显示管理       | [DaemonManager.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/DaemonManager.java) |
 | 虚拟显示会话   | [VirtualDisplaySession.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/VirtualDisplaySession.java) |
-| 多客户端服务器 | [DaemonServer.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/DaemonServer.java) |
+| 多客户端服务器 | [DaemonServer.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/daemon/DaemonServer.java) |
 | TCP 连接       | [TcpDesktopConnection.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/device/TcpDesktopConnection.java) |
-| 视频控制器接口 | [VideoController.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/VideoController.java) |
+| 视频控制器接口 | [VideoController.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/daemon/VideoController.java) |
 | 任务迁移兼容   | [DisplayCompat.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/compat/DisplayCompat.java) |
 | Daemon 主循环  | [DaemonRunner.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/DaemonRunner.java) |

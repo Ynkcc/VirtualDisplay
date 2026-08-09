@@ -66,7 +66,7 @@ if [ "$SKIP_RESTART" = false ]; then
     echo "[3/3] Pushing and starting server..."
     adb push "$APK_PATH" "$REMOTE_APK" 2>&1 | tail -1
 
-    adb shell "su -c 'export CLASSPATH=$REMOTE_APK; nohup app_process / com.genymobile.scrcpy.Server 4.1 tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false --daemon --port=$PORT --bind_address=$BIND_ADDRESS >/data/local/tmp/scrcpy-server.log 2>&1 &'" 2>&1
+    adb shell "su -c 'export CLASSPATH=$REMOTE_APK; nohup app_process / com.genymobile.scrcpy.Server 4.1 tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false daemon=true daemon_port=$PORT daemon_bind_address=$BIND_ADDRESS >/data/local/tmp/scrcpy-server.log 2>&1 &'" 2>&1
 
     sleep 2
     adb forward "tcp:$PORT" "tcp:$PORT" 2>/dev/null || true

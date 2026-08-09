@@ -76,12 +76,13 @@ ClientSession.startVideoStream(displayId)
   ├── ensureVideoFdReady()
   │     └── 轮询等待 video socket 绑定（最多 10 秒）
   │
-  ├── options.copyWithDisplayId(displayId)
+  ├── DaemonArgs.changeDisplayId(baseArgs, displayId)
+  │     └── Options.parse(modifiedArgs)  ← 重建带目标 displayId 的 Options
   │
   ├── 创建 Streamer(videoFd, codec, sendMeta, frameMeta)
   │
   ├── 创建 ScreenCapture(controller, captureOptions)
-  │     └── 绑定到指定 displayId
+  │     └── setExternalDisplayProvider(surfaceBroker) 后绑定到指定 displayId
   │
   ├── 创建 SurfaceEncoder(screenCapture, streamer, captureOptions)
   │
@@ -97,6 +98,6 @@ ClientSession.startVideoStream(displayId)
 
 - [ControlMessage.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/control/ControlMessage.java)
 - [ControlMessageReader.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/control/ControlMessageReader.java)
-- [DaemonCommandHandler.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/control/DaemonCommandHandler.java)
-- [DaemonServer.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/DaemonServer.java)
-- [VideoController.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/VideoController.java)
+- [DaemonCommandHandler.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/daemon/control/DaemonCommandHandler.java)
+- [DaemonServer.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/daemon/DaemonServer.java)
+- [VideoController.java](file:///home/ynk/AndroidStudioProjects/VirtualDisplay/scrcpy/server/src/main/java/com/genymobile/scrcpy/daemon/VideoController.java)
