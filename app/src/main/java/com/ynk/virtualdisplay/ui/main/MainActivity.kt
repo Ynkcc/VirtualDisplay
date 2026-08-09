@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
             if (Sui.init(packageName)) {
                 Log.i(TAG, "Sui initialized successfully")
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e(TAG, "Sui init failed", e)
         }
 

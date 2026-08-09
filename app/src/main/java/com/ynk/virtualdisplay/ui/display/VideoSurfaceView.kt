@@ -84,7 +84,9 @@ class VideoSurfaceView @JvmOverloads constructor(
     fun setFixedBufferSize(width: Int, height: Int) {
         videoWidth = width
         videoHeight = height
-        try { holder.setFixedSize(width, height) } catch (_: Throwable) {}
+        try { holder.setFixedSize(width, height) } catch (e: Exception) {
+            Log.w(TAG, "setFixedSize failed for ${width}x${height}", e)
+        }
         Log.i(TAG, "setFixedBufferSize: ${width}x${height}")
     }
 
@@ -107,7 +109,7 @@ class VideoSurfaceView @JvmOverloads constructor(
                 )
             }
             Log.i(TAG, "Applied surface frame rate: ${targetRefreshRate}Hz")
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.w(TAG, "Failed to apply surface frame rate", e)
         }
     }

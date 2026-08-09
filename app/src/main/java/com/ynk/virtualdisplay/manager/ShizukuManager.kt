@@ -91,7 +91,8 @@ class ShizukuManager {
      */
     fun isBinderAlive(): Boolean = try {
         Shizuku.pingBinder()
-    } catch (e: Throwable) {
+    } catch (e: Exception) {
+        Log.d(TAG, "pingBinder failed (binder not alive?)", e)
         false
     }
 

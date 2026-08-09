@@ -55,7 +55,7 @@ class DaemonProcessController(private val context: Context) {
             } else {
                 -1
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e(TAG, "findDaemonPid failed for port $port", e)
             -1
         }
@@ -91,10 +91,12 @@ class DaemonProcessController(private val context: Context) {
         cachedPid = -1
 
         return try {
+            // Debug 构建开启 VERBOSE 日志便于排查；Release 构建降至 INFO 减少日志噪声。
+            val logLevel = if (com.ynk.virtualdisplay.BuildConfig.DEBUG) "VERBOSE" else "INFO"
             val cmd = arrayOf(
                 "sh",
                 "-c",
-                "nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false daemon=true daemon_port=$port daemon_bind_address=$address >/dev/null 2>&1 &"
+                "nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false log_level=$logLevel daemon=true daemon_port=$port daemon_bind_address=$address >/dev/null 2>&1 &"
             )
 
             val classpath = context.packageCodePath + ":" + context.applicationInfo.sourceDir
@@ -140,7 +142,7 @@ class DaemonProcessController(private val context: Context) {
                 Log.e(TAG, "Failed to invoke Shizuku.newProcess")
                 false
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e(TAG, "startDaemon failed", e)
             false
         }
@@ -193,7 +195,7 @@ class DaemonProcessController(private val context: Context) {
                     proc?.waitFor()
                 }
             }
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e(TAG, "stopDaemon failed", e)
         } finally {
             process = null
@@ -220,7 +222,7 @@ class DaemonProcessController(private val context: Context) {
             method.isAccessible = true
             @Suppress("UNCHECKED_CAST")
             method.invoke(null, cmd, env, dir) as? ShizukuRemoteProcess
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             Log.e(TAG, "invokeNewProcess via reflection failed", e)
             null
         }
