@@ -24,7 +24,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
 import com.ynk.virtualdisplay.MyApplication
 import com.ynk.virtualdisplay.data.model.ShizukuState
-import com.ynk.virtualdisplay.data.repository.ShizukuDisplayRepository
+import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.ui.screens.SettingsScreen
 import com.ynk.virtualdisplay.ui.screens.ShizukuPermissionScreen
 import com.ynk.virtualdisplay.ui.screens.VirtualDisplayScreen
@@ -96,7 +96,7 @@ class MainActivity : ComponentActivity() {
                                     onRetry = { viewModel.checkShizukuStatus(this@MainActivity) },
                                     onRequestPermission = {
                                         try {
-                                            Shizuku.requestPermission(ShizukuDisplayRepository.REQUEST_CODE)
+                                            Shizuku.requestPermission(IDisplayRepository.REQUEST_CODE)
                                         } catch (e: Exception) {
                                             Log.e("MainActivity", "Failed to request permission", e)
                                         }

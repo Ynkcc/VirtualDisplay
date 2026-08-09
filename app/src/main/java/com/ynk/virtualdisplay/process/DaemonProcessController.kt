@@ -1,26 +1,43 @@
-package com.ynk.virtualdisplay.daemon
+package com.ynk.virtualdisplay.process
 
 import android.content.Context
 import android.util.Log
 import com.ynk.virtualdisplay.data.DaemonPrefs
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuRemoteProcess
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Socket
 
-class ClientDaemonManager(private val context: Context) {
+class DaemonProcessController(private val context: Context) {
 
     companion object {
-        private const val TAG = "ClientDaemonManager"
+        private const val TAG = "DaemonProcessController"
+        private const val PORT_READY_TIMEOUT_MS = 5000L
+        private const val PORT_POLL_INTERVAL_MS = 100L
+        private const val PORT_PROBE_TIMEOUT_MS = 300
     }
 
-    private var process: Process? = null
-    private var isRunning = false
+    // Written from startDaemon/stopDaemon on Dispatchers.IO and referenced
+    // across coroutine boundaries; @Volatile for visibility. (isRunning was a
+    // dead field — never read — so it has been removed.)
+    @Volatile private var process: Process? = null
+
+    // Cache of the running daemon pid so UI-facing getDaemonPid() callers don't
+    // repeatedly spawn a blocking shell pgrep. Cleared on stop/start; findDaemonPid()
+    // is still used directly by isDaemonRunning()/stopDaemon() when fresh liveness
+    // data is required.
+    @Volatile private var cachedPid: Int = -1
 
     private val daemonPrefs = DaemonPrefs(context)
 
     fun getDaemonPid(): Int {
+        if (cachedPid > 0) return cachedPid
         val savedPort = daemonPrefs.getSavedPortSync()
         val port = if (savedPort > 0) savedPort else 27183
-        return findDaemonPid(port)
+        val pid = findDaemonPid(port)
+        if (pid > 0) cachedPid = pid
+        return pid
     }
 
     private fun findDaemonPid(port: Int): Int {
@@ -66,11 +83,12 @@ class ClientDaemonManager(private val context: Context) {
         if (savedPid > 0) {
             Log.i(TAG, "Daemon is already running with pid $savedPid on port $port. Reusing it.")
             savePid(port, savedPid)
-            isRunning = true
+            cachedPid = savedPid
             return true
         }
 
         clearSavedPid()
+        cachedPid = -1
 
         return try {
             val cmd = arrayOf(
@@ -93,18 +111,31 @@ class ClientDaemonManager(private val context: Context) {
             if (remoteProcess != null) {
                 process = remoteProcess
 
-                Thread.sleep(800)
-                val activePid = findDaemonPid(port)
-                val alive = activePid > 0
-                isRunning = alive
-                if (alive) {
-                    Log.i(TAG, "Daemon started successfully with pid $activePid")
-                    savePid(port, activePid)
+                // Wait until the daemon's ServerSocket actually accepts connections.
+                // The previous fixed Thread.sleep(800) both wasted time when the port
+                // was already up and was often insufficient (app_process JVM boot can
+                // take >1s), forcing transport.connect into retry backoff. Polling the
+                // TCP port returns as soon as the daemon is ready and yields a precise
+                // "not listening" error otherwise. The probe connects and closes without
+                // writing a role byte; the server's accept loop treats this as an EOF
+                // on readSocketRole and continues (harmless one-line warning).
+                val ready = waitForPort(address, port, PORT_READY_TIMEOUT_MS)
+                if (ready) {
+                    // Best-effort pid resolution: pgrep may briefly miss the process
+                    // (cmdline not populated yet), but that does not affect connectivity.
+                    val activePid = findDaemonPid(port)
+                    if (activePid > 0) {
+                        Log.i(TAG, "Daemon started successfully with pid $activePid on port $port")
+                        savePid(port, activePid)
+                        cachedPid = activePid
+                    } else {
+                        Log.i(TAG, "Daemon port $port is accepting connections (pid not resolved yet)")
+                    }
                 } else {
-                    Log.e(TAG, "Daemon process is not alive after start")
+                    Log.e(TAG, "Daemon process spawned but port $port not accepting within ${PORT_READY_TIMEOUT_MS}ms")
                     process = null
                 }
-                alive
+                ready
             } else {
                 Log.e(TAG, "Failed to invoke Shizuku.newProcess")
                 false
@@ -115,6 +146,31 @@ class ClientDaemonManager(private val context: Context) {
         }
     }
 
+    private fun isPortOpen(host: String, port: Int): Boolean {
+        return try {
+            Socket().use { s ->
+                s.connect(InetSocketAddress(host, port), PORT_PROBE_TIMEOUT_MS)
+                true
+            }
+        } catch (e: IOException) {
+            false
+        }
+    }
+
+    private fun waitForPort(host: String, port: Int, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (isPortOpen(host, port)) return true
+            try {
+                Thread.sleep(PORT_POLL_INTERVAL_MS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+        }
+        return false
+    }
+
     fun stopDaemon() {
         val savedPort = daemonPrefs.getSavedPortSync()
         val port = if (savedPort > 0) savedPort else 27183
@@ -122,18 +178,15 @@ class ClientDaemonManager(private val context: Context) {
         try {
             Log.i(TAG, "Attempting to stop daemon with pid $pid...")
             if (pid > 0) {
-                // 先尝试温和地终止进程 (SIGTERM)，以便触发其 JVM Shutdown Hook 进行虚拟显示器清理
                 var proc = invokeNewProcess(arrayOf("kill", pid.toString()), null, null)
                 proc?.waitFor()
                 
-                // 轮询检查进程是否已退出，最多等 1000 毫秒
                 var checkCount = 0
                 while (checkCount < 10 && findDaemonPid(port) == pid) {
                     Thread.sleep(100)
                     checkCount++
                 }
 
-                // 如果 1000ms 后仍存活，则发送 SIGKILL 强杀兜底
                 if (findDaemonPid(port) == pid) {
                     Log.w(TAG, "Daemon process $pid still alive after SIGTERM, sending SIGKILL...")
                     proc = invokeNewProcess(arrayOf("kill", "-9", pid.toString()), null, null)
@@ -144,7 +197,7 @@ class ClientDaemonManager(private val context: Context) {
             Log.e(TAG, "stopDaemon failed", e)
         } finally {
             process = null
-            isRunning = false
+            cachedPid = -1
             clearSavedPid()
             Log.i(TAG, "Daemon stopped")
         }

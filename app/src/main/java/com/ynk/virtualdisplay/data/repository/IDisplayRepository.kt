@@ -21,6 +21,9 @@ enum class ConnectionStatus {
  * 显示器管理核心仓库接口
  */
 interface IDisplayRepository {
+    companion object {
+        const val REQUEST_CODE = 20260
+    }
     /**
      * 连接状态流
      */
