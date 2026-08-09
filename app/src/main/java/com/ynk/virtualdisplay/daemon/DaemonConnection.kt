@@ -61,7 +61,7 @@ class ClientDaemonConnection {
 
     fun getVideoInputStream(): java.io.InputStream? = videoSocket?.inputStream
 
-    suspend fun connect(port: Int, timeoutMs: Long = 5000): Boolean = withContext(Dispatchers.IO) {
+    suspend fun connect(port: Int, host: String = "127.0.0.1", timeoutMs: Long = 5000): Boolean = withContext(Dispatchers.IO) {
         val deadline = System.currentTimeMillis() + timeoutMs
         var attempt = 0
         var lastException: IOException? = null
@@ -73,8 +73,8 @@ class ClientDaemonConnection {
                 val video = Socket()
                 val control = Socket()
 
-                video.connect(InetSocketAddress("127.0.0.1", port), 1000)
-                control.connect(InetSocketAddress("127.0.0.1", port), 1000)
+                video.connect(InetSocketAddress(host, port), 1000)
+                control.connect(InetSocketAddress(host, port), 1000)
 
                 videoSocket = video
                 controlSocket = control
@@ -84,7 +84,7 @@ class ClientDaemonConnection {
                 startMessageLoopInternal()
 
                 connected = true
-                Log.i(TAG, "Connected to daemon TCP port $port successfully")
+                Log.i(TAG, "Connected to daemon TCP $host:$port successfully")
                 return@withContext true
             } catch (e: IOException) {
                 lastException = e
@@ -96,7 +96,7 @@ class ClientDaemonConnection {
             }
         }
 
-        Log.e(TAG, "Failed to connect to daemon TCP port $port after ${timeoutMs}ms", lastException)
+        Log.e(TAG, "Failed to connect to daemon TCP $host:$port after ${timeoutMs}ms", lastException)
         false
     }
 

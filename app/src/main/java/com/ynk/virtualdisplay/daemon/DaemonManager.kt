@@ -61,7 +61,7 @@ class ClientDaemonManager(private val context: Context) {
         daemonPrefs.clearSavedPid()
     }
 
-    fun startDaemon(port: Int): Boolean {
+    fun startDaemon(port: Int, address: String = "127.0.0.1"): Boolean {
         val savedPid = findDaemonPid(port)
         if (savedPid > 0) {
             Log.i(TAG, "Daemon is already running with pid $savedPid on port $port. Reusing it.")
@@ -76,7 +76,7 @@ class ClientDaemonManager(private val context: Context) {
             val cmd = arrayOf(
                 "sh",
                 "-c",
-                "nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true --daemon --port=$port >/dev/null 2>&1 &"
+                "nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false --daemon --port=$port --bind_address=$address >/dev/null 2>&1 &"
             )
 
             val classpath = context.packageCodePath + ":" + context.applicationInfo.sourceDir
@@ -122,8 +122,23 @@ class ClientDaemonManager(private val context: Context) {
         try {
             Log.i(TAG, "Attempting to stop daemon with pid $pid...")
             if (pid > 0) {
-                val proc = invokeNewProcess(arrayOf("kill", "-9", pid.toString()), null, null)
+                // 先尝试温和地终止进程 (SIGTERM)，以便触发其 JVM Shutdown Hook 进行虚拟显示器清理
+                var proc = invokeNewProcess(arrayOf("kill", pid.toString()), null, null)
                 proc?.waitFor()
+                
+                // 轮询检查进程是否已退出，最多等 1000 毫秒
+                var checkCount = 0
+                while (checkCount < 10 && findDaemonPid(port) == pid) {
+                    Thread.sleep(100)
+                    checkCount++
+                }
+
+                // 如果 1000ms 后仍存活，则发送 SIGKILL 强杀兜底
+                if (findDaemonPid(port) == pid) {
+                    Log.w(TAG, "Daemon process $pid still alive after SIGTERM, sending SIGKILL...")
+                    proc = invokeNewProcess(arrayOf("kill", "-9", pid.toString()), null, null)
+                    proc?.waitFor()
+                }
             }
         } catch (e: Throwable) {
             Log.e(TAG, "stopDaemon failed", e)
