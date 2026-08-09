@@ -282,10 +282,20 @@ class DisplayActivity : ComponentActivity() {
     }
 
     private fun setVideoSurface(surface: Surface?) {
+        // 架构边界：协程内任何未处理异常最终都会崩溃进程（CoroutineExceptionHandler 默认行为）
+        // 此处 runCatching 不是"隐藏问题"，是防止协程内部意外异常变成 uncaught 崩溃；
+        // 失败统一走 Result + 日志 + UI 反馈传导，绝不静默吞。
         lifecycleScope.launch(Dispatchers.Main.immediate) {
-            val result = repository.setDisplaySurface(remoteDisplayId!!, surface)
-            result.exceptionOrNull()?.let {
-                Log.e(TAG, "Failed to set display surface", it)
+            val result = runCatching {
+                repository.setDisplaySurface(remoteDisplayId!!, surface)
+            }.fold(
+                onSuccess = { it },
+                onFailure = { Result.failure(it) }
+            )
+            result.onFailure {
+                Log.e(TAG, "Failed to set display surface (surface=$surface)", it)
+                // TODO: 通知 UI 层（Toast/内联错误提示）视频连接失败
+                // 目前先只保证进程不崩溃，失败信息通过日志可追踪
             }
         }
     }

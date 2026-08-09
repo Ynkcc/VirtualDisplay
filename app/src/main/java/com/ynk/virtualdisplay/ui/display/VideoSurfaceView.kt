@@ -76,18 +76,63 @@ class VideoSurfaceView @JvmOverloads constructor(
     }
 
     fun setVideoSize(width: Int, height: Int) {
+        if (videoWidth == width && videoHeight == height) return
         videoWidth = width
         videoHeight = height
         Log.i(TAG, "setVideoSize: ${width}x${height}")
+        applyFixedSize(width, height)
+        requestLayout()
     }
 
     fun setFixedBufferSize(width: Int, height: Int) {
         videoWidth = width
         videoHeight = height
+        applyFixedSize(width, height)
+        requestLayout()
+        Log.i(TAG, "setFixedBufferSize: ${width}x${height}")
+    }
+
+    private fun applyFixedSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
         try { holder.setFixedSize(width, height) } catch (e: Exception) {
             Log.w(TAG, "setFixedSize failed for ${width}x${height}", e)
         }
-        Log.i(TAG, "setFixedBufferSize: ${width}x${height}")
+    }
+
+    /**
+     * 等比例缩放并完整包含在控件内（fit-center）：
+     *  - 等比例：取宽/高方向缩放比中较小者为基准，保持画面宽高比不变；
+     *  - 完整在控件内：取较小缩放比保证画面不溢出控件；
+     *  - 画面较长边与控件较长边方向一致由上层 Activity 方向旋转（DisplayActivity.applyOrientationForVideo）保证；
+     *  - 缩放后画面较长边==控件较长边（画面相对更宽时）或较短边==控件较短边（画面相对更高时）。
+     *
+     *  控件由 MATCH_PARENT 布局，onMeasure 输出 fit-center 尺寸，再由父布局 Gravity.CENTER 居中，
+     *  使得可视区域与 InputController.getContentRect() 计算的 fit-center 矩形完全对齐，输入映射与画面一致。
+     */
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val availWidth = MeasureSpec.getSize(widthMeasureSpec)
+        val availHeight = MeasureSpec.getSize(heightMeasureSpec)
+
+        if (videoWidth <= 0 || videoHeight <= 0 || availWidth <= 0 || availHeight <= 0) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            return
+        }
+
+        val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
+        val availAspect = availWidth.toFloat() / availHeight.toFloat()
+
+        val targetWidth: Int
+        val targetHeight: Int
+        if (videoAspect > availAspect) {
+            // 画面相对更宽：以控件宽度为基准，缩放后画面较长边==控件较长边（横向）
+            targetWidth = availWidth
+            targetHeight = (availWidth / videoAspect).toInt()
+        } else {
+            // 画面相对更高：以控件高度为基准，缩放后画面较长边==控件较长边（纵向）
+            targetHeight = availHeight
+            targetWidth = (availHeight * videoAspect).toInt()
+        }
+        setMeasuredDimension(targetWidth, targetHeight)
     }
 
     @android.annotation.SuppressLint("NewApi")
