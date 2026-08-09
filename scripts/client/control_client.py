@@ -29,10 +29,16 @@ TYPE_SWITCH_DISPLAY = 207
 TYPE_EXIT_DAEMON = 208
 TYPE_START_VIDEO_STREAM = 209
 TYPE_STOP_VIDEO_STREAM = 210
+TYPE_GET_ROTATION = 211
+TYPE_FREEZE_ROTATION = 212
+TYPE_THAW_ROTATION = 213
+TYPE_IS_ROTATION_FROZEN = 214
+TYPE_GET_ACTIVE_DISPLAY_INFOS = 215
 
 # 设备响应类型 (服务端 -> 客户端)
 TYPE_RESPONSE_GENERIC = 100
 TYPE_RESPONSE_ACTIVE_DISPLAYS = 101
+TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS = 102
 
 
 class ControlClient:
@@ -129,6 +135,27 @@ class ControlClient:
                 "count": count,
                 "display_ids": ids,
             }
+        elif resp_type == TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS:
+            # 协议字段: seq(8B), count(4B), count × [id,w,h,dpi,rotation](5×4B)
+            data = self._recv_exact(12)
+            seq, count = struct.unpack(">qi", data)
+            displays = []
+            for _ in range(count):
+                entry = self._recv_exact(20)
+                did, w, h, dpi, rot = struct.unpack(">iiiii", entry)
+                displays.append({
+                    "display_id": did,
+                    "width": w,
+                    "height": h,
+                    "dpi": dpi,
+                    "rotation": rot,
+                })
+            return {
+                "type": resp_type,
+                "sequence": seq,
+                "count": count,
+                "displays": displays,
+            }
         else:
             raise ValueError(f"未知的响应类型: {resp_type}")
 
@@ -206,3 +233,27 @@ class ControlClient:
     def stop_video_stream(self) -> Dict[str, Any]:
         """TYPE 210: 停止当前连接的视频流。"""
         return self.request(TYPE_STOP_VIDEO_STREAM, b"")
+
+    def get_rotation(self, display_id: int) -> Dict[str, Any]:
+        """TYPE 211: 查询指定显示器的当前旋转角度 (0-3)。响应 msg 为旋转值字符串。"""
+        payload = struct.pack(">i", display_id)
+        return self.request(TYPE_GET_ROTATION, payload)
+
+    def freeze_rotation(self, display_id: int, rotation: int) -> Dict[str, Any]:
+        """TYPE 212: 将指定显示器冻结到指定旋转角度 (0-3)。"""
+        payload = struct.pack(">ii", display_id, rotation)
+        return self.request(TYPE_FREEZE_ROTATION, payload)
+
+    def thaw_rotation(self, display_id: int) -> Dict[str, Any]:
+        """TYPE 213: 解冻指定显示器的旋转。"""
+        payload = struct.pack(">i", display_id)
+        return self.request(TYPE_THAW_ROTATION, payload)
+
+    def is_rotation_frozen(self, display_id: int) -> Dict[str, Any]:
+        """TYPE 214: 查询指定显示器旋转是否已冻结。响应 msg 为 0/1。"""
+        payload = struct.pack(">i", display_id)
+        return self.request(TYPE_IS_ROTATION_FROZEN, payload)
+
+    def get_active_display_infos(self) -> Dict[str, Any]:
+        """TYPE 215: 获取活跃虚拟显示器的详细信息列表 (id/width/height/dpi/rotation)。"""
+        return self.request(TYPE_GET_ACTIVE_DISPLAY_INFOS, b"")

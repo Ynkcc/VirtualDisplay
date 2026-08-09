@@ -68,9 +68,9 @@ app_process / com.genymobile.scrcpy.Server 4.1 \
 | 分类                  | 范围       | 用途                               |
 | --------------------- | ---------- | ---------------------------------- |
 | 上游控制命令          | 0 - 22     | scrcpy 原生控制（按键、触摸等）    |
-| **Daemon 控制命令**   | **201 - 210** | **虚拟显示器、视频流与 daemon 管理命令** |
+| **Daemon 控制命令**   | **201 - 215** | **虚拟显示器、视频流、旋转控制与 daemon 管理命令** |
 | 上游设备响应          | 0 - 2      | scrcpy 原生响应（剪贴板、UHID等）  |
-| **Daemon 设备响应**   | **100 - 101** | **Daemon 命令的响应消息**          |
+| **Daemon 设备响应**   | **100 - 102** | **Daemon 命令的响应消息**          |
 
 ### 消息帧通用格式
 
@@ -96,6 +96,11 @@ app_process / com.genymobile.scrcpy.Server 4.1 \
 | 208  | Exit Daemon                       | [exit-daemon.md](exit-daemon.md) |
 | 209  | Start Video Stream                | [start-video-stream.md](start-video-stream.md) |
 | 210  | Stop Video Stream                 | [stop-video-stream.md](stop-video-stream.md) |
+| 211  | Get Rotation                      | [rotation-control.md](rotation-control.md) |
+| 212  | Freeze Rotation                   | [rotation-control.md](rotation-control.md) |
+| 213  | Thaw Rotation                     | [rotation-control.md](rotation-control.md) |
+| 214  | Is Rotation Frozen                | [rotation-control.md](rotation-control.md) |
+| 215  | Get Active Display Infos          | [get-active-display-infos.md](get-active-display-infos.md) |
 
 ### 命令执行策略
 
@@ -103,7 +108,7 @@ DaemonCommandHandler 内部使用两个线程池：
 
 | 策略    | 线程池              | 命令类型                              |
 | ------- | ------------------- | ------------------------------------- |
-| `FAST`  | `interactiveExecutor` (单线程) | Get Active IDs, Inject Event, Switch Display, Exit Daemon |
+| `FAST`  | `interactiveExecutor` (单线程) | Get Active IDs/Infos, Inject Event, Switch Display, Exit Daemon, Rotation (Get/Freeze/Thaw/IsFrozen) |
 | `SLOW`  | `lifecycleExecutor` (2线程)    | Create/Release/Resize Display, Start Activity, Start/Stop Video Stream |
 
 ## Device Responses (Server → 客户端)
@@ -131,6 +136,17 @@ DaemonCommandHandler 内部使用两个线程池：
 | sequence       | int64     | 8 bytes   | 对应请求的序列号                                     |
 | count          | int32     | 4 bytes   | 活跃显示器数量                                       |
 | display_ids[]  | int32[]   | N×4 bytes | 活跃显示器 ID 数组                                   |
+
+### TYPE: 102 - Active Display Infos Response
+
+仅用于 Get Active Display Infos (TYPE 215) 命令的响应，返回每个显示器的尺寸/DPI/旋转元数据。详见 [get-active-display-infos.md](get-active-display-infos.md)。
+
+| Field          | Type      | Size       | Description                                            |
+| -------------- | --------- | ---------- | ------------------------------------------------------ |
+| type           | uint8     | 1 byte     | 响应类型，固定值 `102`                                 |
+| sequence       | int64     | 8 bytes    | 对应请求的序列号                                       |
+| count          | int32     | 4 bytes    | 活跃显示器数量                                         |
+| displays[]     | struct[]  | count×20B  | 每条记录 5×int32: display_id, width, height, dpi, rotation |
 
 ## 序列号机制
 

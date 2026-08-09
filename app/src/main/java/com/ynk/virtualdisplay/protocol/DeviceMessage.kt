@@ -24,4 +24,19 @@ sealed class DeviceMessage {
 
         override fun hashCode(): Int = 31 * sequence.hashCode() + displayIds.contentHashCode()
     }
+
+    /** Per-display metadata entry for [ActiveDisplayInfosResponse]. */
+    data class DisplayInfoEntry(
+        val displayId: Int,
+        val width: Int,
+        val height: Int,
+        val dpi: Int,
+        val rotation: Int
+    )
+
+    /** Enriched variant of [ActiveDisplaysResponse] (TYPE 102). */
+    data class ActiveDisplayInfosResponse(
+        val sequence: Long,
+        val displays: List<DisplayInfoEntry>
+    ) : DeviceMessage()
 }

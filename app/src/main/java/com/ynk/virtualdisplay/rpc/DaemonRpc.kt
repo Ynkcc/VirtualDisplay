@@ -6,6 +6,7 @@ import com.ynk.virtualdisplay.protocol.ControlMessage
 import com.ynk.virtualdisplay.protocol.DeviceMessage
 import com.ynk.virtualdisplay.protocol.DeviceMessageCodec
 import com.ynk.virtualdisplay.protocol.SequenceGenerator
+import com.ynk.virtualdisplay.util.ExceptionUtils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -60,6 +61,7 @@ class DaemonRpc(
                         if (messageLoopRunning) {
                             Log.e(TAG, "Error reading message", e)
                         }
+                        ExceptionUtils.rethrowInDebug(e)
                         break
                     }
                 }
@@ -96,6 +98,7 @@ class DaemonRpc(
         val sequence = when (message) {
             is DeviceMessage.GenericResponse -> message.sequence
             is DeviceMessage.ActiveDisplaysResponse -> message.sequence
+            is DeviceMessage.ActiveDisplayInfosResponse -> message.sequence
         }
 
         val matched = if (sequence != 0L) {
@@ -146,6 +149,7 @@ class DaemonRpc(
         } catch (e: Exception) {
             pendingRequests.remove(seq)
             Log.e(TAG, "sendAndAwait failed", e)
+            ExceptionUtils.rethrowInDebug(e)
             null
         }
     }

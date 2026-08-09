@@ -10,11 +10,16 @@ interface DaemonControlApi {
     suspend fun resizeDisplay(displayId: Int, w: Int, h: Int, dpi: Int): Result<Unit>
     suspend fun startActivity(packageName: String, displayId: Int): Result<Int>
     suspend fun getActiveDisplayIds(): Result<IntArray>
+    suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>>
     suspend fun injectInput(displayId: Int, isKey: Boolean, parcelBytes: ByteArray): Result<Boolean>
     suspend fun switchDisplay(displayId: Int): Result<Unit>
     suspend fun exitDaemon(): Result<Unit>
     suspend fun startVideoStream(displayId: Int): Result<Unit>
     suspend fun stopVideoStream(): Result<Unit>
+    suspend fun getRotation(displayId: Int): Result<Int>
+    suspend fun freezeRotation(displayId: Int, rotation: Int): Result<Unit>
+    suspend fun thawRotation(displayId: Int): Result<Unit>
+    suspend fun isRotationFrozen(displayId: Int): Result<Boolean>
 }
 
 class DaemonControlApiImpl(private val rpc: DaemonRpc) : DaemonControlApi, com.ynk.virtualdisplay.video.VideoStreamRpc {
@@ -85,6 +90,16 @@ class DaemonControlApiImpl(private val rpc: DaemonRpc) : DaemonControlApi, com.y
         }
     }
 
+    override suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>> {
+        val msg = ControlMessage.GetActiveDisplayInfos
+        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
+        return if (resp is DeviceMessage.ActiveDisplayInfosResponse) {
+            Result.success(resp.displays)
+        } else {
+            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+        }
+    }
+
     override suspend fun injectInput(displayId: Int, isKey: Boolean, parcelBytes: ByteArray): Result<Boolean> {
         val msg = ControlMessage.InjectInputEvent(displayId, isKey, parcelBytes)
         val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
@@ -148,6 +163,52 @@ class DaemonControlApiImpl(private val rpc: DaemonRpc) : DaemonControlApi, com.y
             }
         } else {
             Result.failure(IllegalStateException("Unexpected response type: $resp"))
+        }
+    }
+
+    override suspend fun getRotation(displayId: Int): Result<Int> {
+        val msg = ControlMessage.GetRotation(displayId)
+        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
+        return if (resp is DeviceMessage.GenericResponse && resp.statusCode == 0) {
+            val rotation = resp.message?.toIntOrNull()
+                ?: return Result.failure(IllegalStateException("Missing rotation value in response: ${resp.message}"))
+            Result.success(rotation)
+        } else {
+            Result.failure(IllegalStateException((resp as? DeviceMessage.GenericResponse)?.message ?: "Unexpected response: $resp"))
+        }
+    }
+
+    override suspend fun freezeRotation(displayId: Int, rotation: Int): Result<Unit> {
+        val msg = ControlMessage.FreezeRotation(displayId, rotation)
+        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
+        return if (resp is DeviceMessage.GenericResponse) {
+            if (resp.statusCode == 0) Result.success(Unit)
+            else Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
+        } else {
+            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+        }
+    }
+
+    override suspend fun thawRotation(displayId: Int): Result<Unit> {
+        val msg = ControlMessage.ThawRotation(displayId)
+        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
+        return if (resp is DeviceMessage.GenericResponse) {
+            if (resp.statusCode == 0) Result.success(Unit)
+            else Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
+        } else {
+            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+        }
+    }
+
+    override suspend fun isRotationFrozen(displayId: Int): Result<Boolean> {
+        val msg = ControlMessage.IsRotationFrozen(displayId)
+        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
+        return if (resp is DeviceMessage.GenericResponse && resp.statusCode == 0) {
+            val frozen = resp.message?.toIntOrNull()
+                ?: return Result.failure(IllegalStateException("Missing frozen value in response: ${resp.message}"))
+            Result.success(frozen != 0)
+        } else {
+            Result.failure(IllegalStateException((resp as? DeviceMessage.GenericResponse)?.message ?: "Unexpected response: $resp"))
         }
     }
 }

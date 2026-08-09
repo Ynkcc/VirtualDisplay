@@ -110,6 +110,40 @@ sealed class ControlMessage {
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {}
     }
 
+    data class GetRotation(val displayId: Int) : ControlMessage() {
+        override val type: Int = TYPE_GET_ROTATION
+        override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
+            writeInt(displayId)
+        }
+    }
+
+    data class FreezeRotation(val displayId: Int, val rotation: Int) : ControlMessage() {
+        override val type: Int = TYPE_FREEZE_ROTATION
+        override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
+            writeInt(displayId)
+            writeInt(rotation)
+        }
+    }
+
+    data class ThawRotation(val displayId: Int) : ControlMessage() {
+        override val type: Int = TYPE_THAW_ROTATION
+        override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
+            writeInt(displayId)
+        }
+    }
+
+    data class IsRotationFrozen(val displayId: Int) : ControlMessage() {
+        override val type: Int = TYPE_IS_ROTATION_FROZEN
+        override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
+            writeInt(displayId)
+        }
+    }
+
+    object GetActiveDisplayInfos : ControlMessage() {
+        override val type: Int = TYPE_GET_ACTIVE_DISPLAY_INFOS
+        override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {}
+    }
+
     protected fun buildMessage(type: Int, sequence: Long, block: DataOutputStream.() -> Unit): ByteArray {
         val baos = ByteArrayOutputStream()
         DataOutputStream(baos).use { dos ->
@@ -131,6 +165,11 @@ sealed class ControlMessage {
         const val TYPE_EXIT_DAEMON = 208
         const val TYPE_START_VIDEO_STREAM = 209
         const val TYPE_STOP_VIDEO_STREAM = 210
+        const val TYPE_GET_ROTATION = 211
+        const val TYPE_FREEZE_ROTATION = 212
+        const val TYPE_THAW_ROTATION = 213
+        const val TYPE_IS_ROTATION_FROZEN = 214
+        const val TYPE_GET_ACTIVE_DISPLAY_INFOS = 215
     }
 }
 
