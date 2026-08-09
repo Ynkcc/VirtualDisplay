@@ -48,6 +48,8 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     private val _managedDisplayIds = MutableStateFlow<Set<Int>>(emptySet())
     override val managedDisplayIds: StateFlow<Set<Int>> = _managedDisplayIds.asStateFlow()
 
+
+
     private val _daemonPid = MutableStateFlow(-1)
     override val daemonPid: StateFlow<Int> = _daemonPid.asStateFlow()
 
@@ -98,9 +100,10 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
             _connectionStatus.value = ConnectionStatus.BINDING
 
             val port = AppSettings.getServerPort(context)
+            val host = AppSettings.getServerHost(context)
 
             val daemonStarted = withContext(Dispatchers.IO) {
-                daemonManager.startDaemon(port)
+                daemonManager.startDaemon(port, host)
             }
             if (!daemonStarted) {
                 Log.e(TAG, "Failed to start daemon")
@@ -110,7 +113,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
                 return@launch
             }
 
-            val connected = daemonConnection.connect(port = port, timeoutMs = 5000)
+            val connected = daemonConnection.connect(port = port, host = host, timeoutMs = 5000)
             if (!connected) {
                 Log.e(TAG, "Failed to connect to daemon socket")
                 daemonManager.stopDaemon()
@@ -144,7 +147,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
                     val sequence = CustomControlMessage.nextSequence()
                     val bytes = CustomControlMessage.createExitDaemon(sequence)
                     daemonConnection.sendControlMessage(bytes)
-                    kotlinx.coroutines.delay(100)
+                    kotlinx.coroutines.delay(300)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to send exit command to daemon", e)
@@ -161,11 +164,24 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     private fun refreshManagedDisplays() {
         scope.launch {
             _daemonPid.value = daemonManager.getDaemonPid()
-            val result = getActiveDisplayIds()
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    ensureConnected()
+                    val sequence = CustomControlMessage.nextSequence()
+                    val bytes = CustomControlMessage.createGetActiveDisplayIds(sequence)
+                    val response = daemonConnection.sendAndAwait(bytes, sequence)
+                    if (response is CustomDeviceMessage.ActiveDisplaysResponse) {
+                        response.displayIds
+                    } else {
+                        null
+                    }
+                }
+            }
             result.onSuccess { ids ->
-                _managedDisplayIds.value = ids.toSet()
+                _managedDisplayIds.value = ids?.toSet() ?: emptySet()
             }.onFailure {
                 Log.w(TAG, "refreshManagedDisplays failed", it)
+                _managedDisplayIds.value = emptySet()
             }
         }
     }
@@ -178,7 +194,8 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
             return false
         }
         val port = AppSettings.getServerPort(context)
-        val connected = daemonConnection.connect(port = port, timeoutMs = 5000)
+        val host = AppSettings.getServerHost(context)
+        val connected = daemonConnection.connect(port = port, host = host, timeoutMs = 5000)
         if (connected) {
             daemonConnection.startMessageLoop()
         }
@@ -271,7 +288,8 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     private suspend fun startStreamingToDisplay(displayId: Int) {
         if (!daemonConnection.isConnected()) {
             val port = AppSettings.getServerPort(context)
-            val connected = daemonConnection.connect(port = port, timeoutMs = 5000)
+            val host = AppSettings.getServerHost(context)
+            val connected = daemonConnection.connect(port = port, host = host, timeoutMs = 5000)
             if (!connected) {
                 throw IllegalStateException("Failed to connect to daemon")
             }
@@ -440,20 +458,7 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     }
 
     override suspend fun getActiveDisplayIds(): Result<IntArray> {
-        return withContext(Dispatchers.IO) {
-            runCatching {
-                ensureConnected()
-                val sequence = CustomControlMessage.nextSequence()
-                val bytes = CustomControlMessage.createGetActiveDisplayIds(sequence)
-                val response = daemonConnection.sendAndAwait(bytes, sequence)
-                if (response is CustomDeviceMessage.ActiveDisplaysResponse) {
-                    response.displayIds
-                } else {
-                    Log.w(TAG, "getActiveDisplayIds: unexpected response type ${response?.javaClass?.simpleName}, returning empty list")
-                    emptyArray<Int>().toIntArray()
-                }
-            }
-        }
+        return Result.success(_managedDisplayIds.value.toIntArray())
     }
 
     override fun isShizukuAvailable(): Boolean {
@@ -492,6 +497,10 @@ class ShizukuDisplayRepository(private val context: Context) : IDisplayRepositor
     override fun setPerformanceStatsCallback(callback: ((String) -> Unit)?) {
         performanceStatsCallback = callback
         decoder?.onPerformanceStats = callback
+    }
+
+    override fun refreshDisplays() {
+        refreshManagedDisplays()
     }
 
     private suspend fun buildDefaultFlags(): Int {

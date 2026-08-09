@@ -23,6 +23,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -105,6 +106,25 @@ class DisplayActivity : ComponentActivity() {
             scope = lifecycleScope,
         )
 
+        backCallback = object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (AppSettings.captureBackCache.value) {
+                    inputController.injectKey(KeyEvent.KEYCODE_BACK)
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, backCallback)
+
+        lifecycleScope.launch {
+            AppSettings.captureBackCache.collect { capture ->
+                backCallback.isEnabled = capture
+            }
+        }
+
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.registerDisplayListener(displayListener, null)
         updateDisplayInfo(displayId)
@@ -126,6 +146,7 @@ class DisplayActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        backCallback.remove()
         repository.setPerformanceStatsCallback(null)
         repository.setVideoConfigCallback(null)
         resizeJob?.cancel()
@@ -390,7 +411,9 @@ class DisplayActivity : ComponentActivity() {
         return true
     }
 
-    @SuppressLint("RestrictedApi")
+    private lateinit var backCallback: OnBackPressedCallback
+
+    @SuppressLint("RestrictedApi", "GestureBackNavigation")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (AppSettings.captureBackCache.value) {

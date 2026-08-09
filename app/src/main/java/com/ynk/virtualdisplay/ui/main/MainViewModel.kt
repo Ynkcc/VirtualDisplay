@@ -83,6 +83,8 @@ class MainViewModel(
                 refreshDisplays(appContext)
             }
         }
+
+
     }
 
     fun switchTab(tab: ScreenTab) {
@@ -218,9 +220,11 @@ class MainViewModel(
     }
 
     fun refreshDisplays(context: Context) {
+        repository.refreshDisplays()
         checkAndInitDeviceMetrics(context)
         val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
         val managedByService = repository.managedDisplayIds.value
+
         
         val displaysList = mutableListOf<DisplayInfoModel>()
         val orphans = mutableListOf<Int>()
@@ -287,7 +291,6 @@ class MainViewModel(
 
 
     override fun onCleared() {
-        super.onCleared()
         val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
         dm.unregisterDisplayListener(displayListener)
         Shizuku.removeRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER)
