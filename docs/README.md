@@ -25,10 +25,11 @@ Daemon 模式采用多客户端 TCP 服务器架构，支持多个客户端同�
   │←─── ServerSocket.accept() ───────── │
   │                                     │
   │─── write ROLE_CONTROL (2) ────────→ │
-  │←─── read ROLE byte ──────────────── │
-  │←─── writeSessionId (4 bytes) ────── │
+  │                                     │ readSocketRole()
+  │←─── writeSessionId (4 bytes BE) ─── │  ← 服务端分配唯一 sessionId
+  │←─── writeDeviceMeta (64 bytes) ──── │  ← 设备名称，UTF-8 填充至 64 字节
   │                                     │
-  │        (可选)                        │
+  │        (可选: video/audio socket)    │
   │─── write ROLE_VIDEO (0) ──────────→ │  → readSessionId → 绑定到对应 ClientSession
   │─── write ROLE_AUDIO (1) ──────────→ │  → readSessionId → 绑定到对应 ClientSession
 ```

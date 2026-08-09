@@ -57,7 +57,7 @@ type: 100
 sequence: 2
 status_code: -1
 display_id: 99
-msg: "display id=99 not found in activeDisplays"
+msg: "display id=99 not found in activeSessions"
 ```
 
 ## Notes

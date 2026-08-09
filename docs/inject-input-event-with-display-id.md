@@ -102,12 +102,12 @@ msg: "Failed to inject input event"
 
 ## Notes
 
-- 使用 `Device.injectEvent(event, displayId, Device.INJECT_MODE_ASYNC)` 模式注入（displayId != 0 时）
-- 当 `displayId == 0` 时，使用 `ServiceManager.getInputManager().injectInputEvent(event, INJECT_MODE_ASYNC)` 注入，不走 Device 层
-- 对非主屏事件，会先调用 `InputManager.setDisplayId(event, targetDisplayId)` 设置事件目标
+- 使用 `Device.injectEvent(event, displayId, Device.INJECT_MODE_ASYNC)` 模式注入，该方法内部会先通过反射调用 `InputEvent.setDisplayId(int)` 设置事件的目标显示器，再调用 `InputManager.injectInputEvent()` 完成注入
+- 当 `displayId == 0`（主屏）且 Java 层注入失败时，会 fallback 到 shell 命令 `input tap x y`（通过 `su -c` 执行），以兼容 SELinux/Magisk 环境下主屏注入受限的情况
 - Parcel 数据通过 `Parcel.obtain()` → `unmarshall()` → `CREATOR.createFromParcel()` 反序列化
 - 此方法绕过了 Controller 的输入映射逻辑，直接在目标 display 上发送原始事件
 - 最大 Parcel 数据大小受 `MESSAGE_MAX_SIZE` (256KB) 限制
+- 对不存在的 displayId，注入会返回失败（状态码 -1）
 
 ## Source
 

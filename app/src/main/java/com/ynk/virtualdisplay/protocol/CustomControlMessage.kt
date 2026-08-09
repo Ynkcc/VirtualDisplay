@@ -15,6 +15,8 @@ object CustomControlMessage {
     const val TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID: Int = 206
     const val TYPE_SWITCH_DISPLAY: Int = 207
     const val TYPE_EXIT_DAEMON: Int = 208
+    const val TYPE_START_VIDEO_STREAM: Int = 209
+    const val TYPE_STOP_VIDEO_STREAM: Int = 210
 
     private val sequenceGen = AtomicLong(1L)
 
@@ -74,6 +76,17 @@ object CustomControlMessage {
 
     fun createExitDaemon(sequence: Long = nextSequence()): ByteArray {
         return buildMessage(TYPE_EXIT_DAEMON, sequence) {
+        }
+    }
+
+    fun createStartVideoStream(displayId: Int, sequence: Long = nextSequence()): ByteArray {
+        return buildMessage(TYPE_START_VIDEO_STREAM, sequence) {
+            writeInt(displayId)
+        }
+    }
+
+    fun createStopVideoStream(sequence: Long = nextSequence()): ByteArray {
+        return buildMessage(TYPE_STOP_VIDEO_STREAM, sequence) {
         }
     }
 
