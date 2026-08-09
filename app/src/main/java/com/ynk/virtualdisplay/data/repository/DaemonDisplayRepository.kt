@@ -227,23 +227,35 @@ class DaemonDisplayRepository(
         if (surface != null) {
             val isFirstTime = currentStreamingDisplayId != displayId
             if (isFirstTime) {
-                startStreamingToDisplay(displayId)
+                // startStreamingToDisplay 绝不 throw——失败通过 Result 返回
+                return startStreamingToDisplay(displayId)
             } else {
-                videoController.setSurface(surface)
+                runCatching { videoController.setSurface(surface) }.onFailure {
+                    Log.e(TAG, "setSurface failed for display $displayId", it)
+                    return Result.failure(it)
+                }
             }
         } else {
-            videoController.setSurface(null)
+            runCatching { videoController.setSurface(null) }.onFailure {
+                Log.w(TAG, "setSurface(null) failed", it)
+                // Surface 销毁属正常生命周期，不把清理失败向上抛为 UI 层错误
+            }
         }
         return Result.success(Unit)
     }
 
-    private suspend fun startStreamingToDisplay(displayId: Int) {
-        if (currentStreamingDisplayId == displayId) return
+    private suspend fun startStreamingToDisplay(displayId: Int): Result<Unit> {
+        if (currentStreamingDisplayId == displayId) return Result.success(Unit)
         if (currentStreamingDisplayId != -1) {
-            videoController.stop()
+            runCatching { videoController.stop() }.onFailure {
+                Log.w(TAG, "stop previous stream failed, proceeding anyway", it)
+            }
         }
-        videoController.start(displayId, decoderSurface, DEFAULT_WIDTH, DEFAULT_HEIGHT)
-        currentStreamingDisplayId = displayId
+        val startResult = videoController.start(displayId, decoderSurface, DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        if (startResult.isSuccess) {
+            currentStreamingDisplayId = displayId
+        }
+        return startResult
     }
 
     override suspend fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Result<Unit> {
