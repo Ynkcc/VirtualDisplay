@@ -47,8 +47,6 @@ android {
         buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
         buildConfigField("Boolean", "GIT_DIRTY", "$isDirty")
         buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     java {
@@ -102,10 +100,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_21
     }
 
-    testOptions {
-        unitTests.isReturnDefaultValues = true
-    }
-
     buildFeatures {
         compose = true
         aidl = true
@@ -137,15 +131,11 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
-    testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
     implementation(libs.hiddenapibypass)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.koin.android)
+    implementation(libs.koin.androidx.compose)
 }
