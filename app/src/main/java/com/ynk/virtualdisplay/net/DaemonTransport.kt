@@ -26,8 +26,11 @@ class DaemonTransport {
     // them. @Volatile guarantees readers see the latest reference instead of a
     // stale cached null. Callers already tolerate a null return (and IOExceptions
     // from a concurrently-closed socket).
+    @Volatile private var negotiationSocket: Socket? = null
     @Volatile private var controlSocket: Socket? = null
     @Volatile private var videoSocket: Socket? = null
+    @Volatile internal var negotiationIn: DataInputStream? = null
+    @Volatile internal var negotiationOut: DataOutputStream? = null
     @Volatile internal var controlIn: DataInputStream? = null
     @Volatile internal var controlOut: DataOutputStream? = null
 
@@ -40,24 +43,14 @@ class DaemonTransport {
     var session: DaemonSession? = null
         private set
 
+    fun negotiationInputStream(): DataInputStream? = negotiationIn
+    fun negotiationOutputStream(): DataOutputStream? = negotiationOut
     fun controlInputStream(): DataInputStream? = controlIn
     fun controlOutputStream(): DataOutputStream? = controlOut
     fun videoInputStream(): InputStream? = videoSocket?.inputStream
 
     /**
      * Close the current video socket and open a fresh one.
-     *
-     * This is used when switching video streams (stop→start) to guarantee a
-     * clean byte stream for the new decoder. The old decoder's input worker
-     * may be stuck in a blocking [InputStream.read] on the old socket — closing
-     * the old socket is the only reliable way to unblock it (Thread.interrupt()
-     * does not interrupt socket reads). The new socket provides a stream with
-     * no stale partial-frame data.
-     *
-     * Must be called AFTER [rpc.stopVideoStream] (210) so the server's encoder
-     * has stopped and won't write to a half-closed socket.
-     *
-     * @return the new video [InputStream], or null if reconnection failed.
      */
     fun reconnectVideoSocket(): InputStream? {
         // Close old video socket — this unblocks any reader stuck in input.read()
@@ -89,6 +82,52 @@ class DaemonTransport {
         }
     }
 
+    suspend fun connectScrcpyChannels(): Boolean = withContext(Dispatchers.IO) {
+        val currentSession = session ?: return@withContext false
+        try {
+            disconnectScrcpyChannels()
+
+            val ctrl = Socket()
+            ctrl.connect(InetSocketAddress(host, port), 1000)
+            controlSocket = ctrl
+
+            val ctrlOut = ctrl.getOutputStream()
+            DaemonHandshake.writeRole(ctrlOut, DaemonSocketRole.ROLE_CONTROL)
+            DaemonHandshake.writeSessionId(ctrlOut, currentSession.sessionId)
+
+            controlIn = DataInputStream(ctrl.inputStream)
+            controlOut = DataOutputStream(ctrlOut)
+            Log.i(TAG, "Scrcpy control channel connected and bound to session ${currentSession.sessionId} successfully")
+
+            val video = Socket()
+            video.connect(InetSocketAddress(host, port), 1000)
+            videoSocket = video
+
+            val videoOut = video.getOutputStream()
+            DaemonHandshake.writeRole(videoOut, DaemonSocketRole.ROLE_VIDEO)
+            DaemonHandshake.writeSessionId(videoOut, currentSession.sessionId)
+
+            Log.i(TAG, "Video channel connected and bound to session ${currentSession.sessionId} successfully")
+            true
+        } catch (e: IOException) {
+            Log.e(TAG, "Failed to connect Scrcpy channels", e)
+            disconnectScrcpyChannels()
+            false
+        }
+    }
+
+    fun disconnectScrcpyChannels() {
+        runCatching { controlIn?.close() }
+        runCatching { controlOut?.close() }
+        runCatching { controlSocket?.close() }
+        runCatching { videoSocket?.close() }
+        controlIn = null
+        controlOut = null
+        controlSocket = null
+        videoSocket = null
+        Log.i(TAG, "Scrcpy channels disconnected")
+    }
+
     suspend fun connect(host: String, port: Int, timeoutMs: Long): Boolean = withContext(Dispatchers.IO) {
         this@DaemonTransport.host = host
         this@DaemonTransport.port = port
@@ -101,16 +140,16 @@ class DaemonTransport {
             try {
                 disconnectInternal()
 
-                val control = Socket()
-                control.connect(InetSocketAddress(host, port), 1000)
-                controlSocket = control
+                val negotiation = Socket()
+                negotiation.connect(InetSocketAddress(host, port), 1000)
+                negotiationSocket = negotiation
 
-                // 1. Control Socket 握手
-                val out = control.getOutputStream()
-                val input = control.getInputStream()
+                // 1. Negotiation Socket 握手
+                val out = negotiation.getOutputStream()
+                val input = negotiation.getInputStream()
 
-                // 写 ROLE_CONTROL
-                DaemonHandshake.writeRole(out, DaemonSocketRole.ROLE_CONTROL)
+                // 写 ROLE_NEGOTIATION
+                DaemonHandshake.writeRole(out, DaemonSocketRole.ROLE_NEGOTIATION)
 
                 // 读 sessionId
                 val sessionId = DaemonHandshake.readSessionId(input)
@@ -119,23 +158,11 @@ class DaemonTransport {
                 val deviceName = DaemonHandshake.readDeviceMeta(input)
 
                 session = DaemonSession(sessionId, deviceName)
-                Log.i(TAG, "Control socket handshake successful: sessionId=$sessionId, deviceName=$deviceName")
+                Log.i(TAG, "Negotiation socket handshake successful: sessionId=$sessionId, deviceName=$deviceName")
 
-                controlIn = DataInputStream(input)
-                controlOut = DataOutputStream(out)
+                negotiationIn = DataInputStream(input)
+                negotiationOut = DataOutputStream(out)
 
-                // 2. Video Socket 连接与握手
-                val video = Socket()
-                video.connect(InetSocketAddress(host, port), 1000)
-                videoSocket = video
-
-                val videoOut = video.getOutputStream()
-                // 写 ROLE_VIDEO
-                DaemonHandshake.writeRole(videoOut, DaemonSocketRole.ROLE_VIDEO)
-                // 写 sessionId
-                DaemonHandshake.writeSessionId(videoOut, sessionId)
-
-                Log.i(TAG, "Video socket connected and bound to session $sessionId successfully")
                 return@withContext true
             } catch (e: IOException) {
                 lastException = e
@@ -157,14 +184,13 @@ class DaemonTransport {
     }
 
     private fun disconnectInternal() {
-        runCatching { controlIn?.close() }
-        runCatching { controlOut?.close() }
-        runCatching { controlSocket?.close() }
-        runCatching { videoSocket?.close() }
-        controlIn = null
-        controlOut = null
-        controlSocket = null
-        videoSocket = null
+        disconnectScrcpyChannels()
+        runCatching { negotiationIn?.close() }
+        runCatching { negotiationOut?.close() }
+        runCatching { negotiationSocket?.close() }
+        negotiationIn = null
+        negotiationOut = null
+        negotiationSocket = null
         session = null
     }
 }

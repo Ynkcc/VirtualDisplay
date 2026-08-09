@@ -32,61 +32,31 @@ class VideoStreamController(
     suspend fun start(displayId: Int, surface: Surface?, w: Int, h: Int): Result<Unit> = mutex.withLock {
         Log.i(TAG, "Starting video stream for display $displayId...")
 
-        // Always try to stop any existing server-side video stream first.
-        // This handles three scenarios:
-        //  1. Same-instance stop→start (decoder != null): the previous decoder
-        //     is being replaced; the server's encoder must be stopped.
-        //  2. Activity recreation (decoder == null): the previous Activity
-        //     instance may not have called stop(), leaving the server's encoder
-        //     running with videoStarted=true. Without this probe, the server
-        //     would reject 209 with "already started".
-        //  3. Previous stream failed on the client (e.g., Invalid packet size)
-        //     but the server's encoder is still running.
-        val serverHadVideo = runCatching { rpc.stopVideoStream() }
-            .getOrNull()?.isSuccess == true
-
-        // If the server had a running video stream OR we have a local decoder,
-        // reconnect the video socket. Closing the old socket unblocks any stuck
-        // input worker from the previous decoder (socket reads are not
-        // interruptible by Thread.interrupt()), and the new socket provides a
-        // clean byte stream free of stale partial-frame data.
-        //
-        // Reconnect BEFORE decoder.stop() so the socket close unblocks the
-        // input worker first — then decoder.stop()'s join succeeds quickly
-        // instead of timing out after 500ms.
-        if (serverHadVideo || decoder != null) {
-            Log.i(TAG, "Reconnecting video socket (serverHadVideo=$serverHadVideo, hasDecoder=${decoder != null})")
-            transport.reconnectVideoSocket()?.let {
-                // Brief delay to let the server's accept loop process the new
-                // video socket (read role + sessionId, call bindVideoSocket)
-                // before we send 209, which triggers startVideoStream to use
-                // the new FD. In practice the accept loop processes in μs, but
-                // a small guard delay eliminates the rare race.
-                delay(50)
-            } ?: run {
-                Log.e(TAG, "Failed to reconnect video socket")
-                return@withLock Result.failure(IOException("Video socket reconnection failed"))
-            }
-        }
-
+        // 1. 如果已有正在运行的本地解码器，先将其彻底关闭并清理
         if (decoder != null) {
-            // Stop the local decoder now that the old video socket is closed.
-            // The input worker has already exited (SocketException from the
-            // closed socket), so join succeeds quickly.
             decoder?.stop()
             decoder = null
             tracker = null
         }
 
-        // 修复断层 B: 先向服务端发送 startVideoStream 信号 (209)
-        // 失败作为 Result 返回，绝不 throw——避免协程未捕获异常直接崩溃进程
+        // 2. 物理断开之前残留的 Scrcpy 子通道 (视频 + 控制) 以保干净
+        transport.disconnectScrcpyChannels()
+
+        // 3. 发送 startVideoStream 信令，二阶段协商
         val startResult = rpc.startVideoStream(displayId)
         startResult.onFailure {
             Log.e(TAG, "Failed to send startVideoStream(209) to daemon", it)
             return@withLock Result.failure(it)
         }
 
-        // 成功建立信号后，获取视频流读取端
+        // 4. 协商 Success，此时物理连接 ROLE_CONTROL 和 ROLE_VIDEO 通道并绑定
+        val channelsConnected = transport.connectScrcpyChannels()
+        if (!channelsConnected) {
+            Log.e(TAG, "Failed to connect Scrcpy channels (video and control sockets)")
+            return@withLock Result.failure(IOException("Scrcpy channels connection failed"))
+        }
+
+        // 5. 成功建立物理连接后，获取视频流读取端
         val videoIn = try {
             transport.videoInputStream()
         } catch (t: Throwable) {
@@ -123,6 +93,7 @@ class VideoStreamController(
         }
         decoderResult.onFailure {
             Log.e(TAG, "Failed to create/start H264StreamDecoder", it)
+            transport.disconnectScrcpyChannels()
             return@withLock Result.failure(it)
         }
 
@@ -147,6 +118,9 @@ class VideoStreamController(
         decoder?.stop()
         decoder = null
         tracker = null
+
+        // 物理断开 Scrcpy 控制与视频子信道，保持协商通道依然活跃
+        transport.disconnectScrcpyChannels()
         Log.i(TAG, "VideoStreamController stopped")
     }
 

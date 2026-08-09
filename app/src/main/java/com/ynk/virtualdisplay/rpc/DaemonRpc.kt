@@ -41,7 +41,7 @@ class DaemonRpc(
 
     fun startMessageLoop(scope: CoroutineScope) {
         if (messageLoopRunning) return
-        val reader = transport.controlInputStream() ?: return
+        val reader = transport.negotiationInputStream() ?: return
 
         messageLoopRunning = true
         messageJob = scope.launch(Dispatchers.IO) {
@@ -119,7 +119,7 @@ class DaemonRpc(
     }
 
     suspend fun sendAndAwait(msg: ControlMessage, timeoutMs: Long = 5000): DeviceMessage? = withContext(Dispatchers.IO) {
-        val writer = transport.controlOutputStream() ?: return@withContext null
+        val writer = transport.negotiationOutputStream() ?: return@withContext null
         val seq = nextSequence()
         val bytes = msg.encode(seq)
 

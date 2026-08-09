@@ -45,7 +45,7 @@ val appModule = module {
     // 先注册实现类，再分别绑定两个接口（都指向同一个单例实例）
     // DaemonControlApi：控制命令 API（供 RemoteDataSource 使用）
     // VideoStreamRpc：视频流 RPC（供 VideoStreamController 使用）
-    single { DaemonControlApiImpl(get()) }
+    single { DaemonControlApiImpl(get(), get()) }
     single<DaemonControlApi> { get<DaemonControlApiImpl>() }
     single<VideoStreamRpc> { get<DaemonControlApiImpl>() }
 

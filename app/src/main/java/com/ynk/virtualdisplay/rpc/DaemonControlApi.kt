@@ -22,7 +22,10 @@ interface DaemonControlApi {
     suspend fun isRotationFrozen(displayId: Int): Result<Boolean>
 }
 
-class DaemonControlApiImpl(private val rpc: DaemonRpc) : DaemonControlApi, com.ynk.virtualdisplay.video.VideoStreamRpc {
+class DaemonControlApiImpl(
+    private val rpc: DaemonRpc,
+    private val transport: com.ynk.virtualdisplay.net.DaemonTransport
+) : DaemonControlApi, com.ynk.virtualdisplay.video.VideoStreamRpc {
 
     override suspend fun createDisplay(name: String, w: Int, h: Int, dpi: Int, flags: Int): Result<Int> {
         val msg = ControlMessage.CreateVirtualDisplay(name, w, h, dpi, flags)
@@ -100,13 +103,17 @@ class DaemonControlApiImpl(private val rpc: DaemonRpc) : DaemonControlApi, com.y
         }
     }
 
-    override suspend fun injectInput(displayId: Int, isKey: Boolean, parcelBytes: ByteArray): Result<Boolean> {
+    override suspend fun injectInput(displayId: Int, isKey: Boolean, parcelBytes: ByteArray): Result<Boolean> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val writer = transport.controlOutputStream() ?: return@withContext Result.failure(IOException("Control channel not connected"))
         val msg = ControlMessage.InjectInputEvent(displayId, isKey, parcelBytes)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            Result.success(resp.statusCode == 0)
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+        val seq = rpc.nextSequence()
+        val bytes = msg.encode(seq)
+        return@withContext try {
+            writer.write(bytes)
+            writer.flush()
+            Result.success(true)
+        } catch (e: IOException) {
+            Result.failure(e)
         }
     }
 
