@@ -31,6 +31,11 @@ class DaemonTransport {
     @Volatile internal var controlIn: DataInputStream? = null
     @Volatile internal var controlOut: DataOutputStream? = null
 
+    // Stored during connect() so reconnectVideoSocket() can open a fresh socket
+    // without re-handshaking the control channel.
+    @Volatile private var host: String = ""
+    @Volatile private var port: Int = 0
+
     @Volatile
     var session: DaemonSession? = null
         private set
@@ -39,7 +44,55 @@ class DaemonTransport {
     fun controlOutputStream(): DataOutputStream? = controlOut
     fun videoInputStream(): InputStream? = videoSocket?.inputStream
 
+    /**
+     * Close the current video socket and open a fresh one.
+     *
+     * This is used when switching video streams (stop→start) to guarantee a
+     * clean byte stream for the new decoder. The old decoder's input worker
+     * may be stuck in a blocking [InputStream.read] on the old socket — closing
+     * the old socket is the only reliable way to unblock it (Thread.interrupt()
+     * does not interrupt socket reads). The new socket provides a stream with
+     * no stale partial-frame data.
+     *
+     * Must be called AFTER [rpc.stopVideoStream] (210) so the server's encoder
+     * has stopped and won't write to a half-closed socket.
+     *
+     * @return the new video [InputStream], or null if reconnection failed.
+     */
+    fun reconnectVideoSocket(): InputStream? {
+        // Close old video socket — this unblocks any reader stuck in input.read()
+        // on the old InputStream, causing it to throw SocketException and exit.
+        runCatching { videoSocket?.close() }
+        videoSocket = null
+
+        val currentSession = session ?: run {
+            Log.e(TAG, "reconnectVideoSocket: no active session")
+            return null
+        }
+
+        return try {
+            val video = Socket()
+            video.connect(InetSocketAddress(host, port), 1000)
+            videoSocket = video
+
+            val videoOut = video.getOutputStream()
+            DaemonHandshake.writeRole(videoOut, DaemonSocketRole.ROLE_VIDEO)
+            DaemonHandshake.writeSessionId(videoOut, currentSession.sessionId)
+
+            Log.i(TAG, "Video socket reconnected and bound to session ${currentSession.sessionId}")
+            video.inputStream
+        } catch (e: IOException) {
+            Log.e(TAG, "reconnectVideoSocket failed", e)
+            runCatching { videoSocket?.close() }
+            videoSocket = null
+            null
+        }
+    }
+
     suspend fun connect(host: String, port: Int, timeoutMs: Long): Boolean = withContext(Dispatchers.IO) {
+        this@DaemonTransport.host = host
+        this@DaemonTransport.port = port
+
         val deadline = System.currentTimeMillis() + timeoutMs
         var attempt = 0
         var lastException: IOException? = null
