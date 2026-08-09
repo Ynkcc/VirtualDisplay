@@ -28,16 +28,16 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
-import com.ynk.virtualdisplay.MyApplication
 import com.ynk.virtualdisplay.R
 import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.model.AppInfo
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.data.repository.RecentAppHelper
-import com.ynk.virtualdisplay.util.DisplayUtils
+import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import org.koin.android.ext.android.inject
 
 @SuppressLint("ClickableViewAccessibility", "UseKtx")
 class DisplayActivity : ComponentActivity() {
@@ -65,9 +65,8 @@ class DisplayActivity : ComponentActivity() {
     private lateinit var controlPanel: DisplayControlPanel
     private lateinit var inputController: InputController
 
-    private val repository: IDisplayRepository by lazy {
-        (application as MyApplication).displayRepository
-    }
+    private val repository: IDisplayRepository by inject()
+    private val displayMetricsManager: DisplayMetricsManager by inject()
 
     private val displayListener = object : android.hardware.display.DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) {
@@ -313,7 +312,7 @@ class DisplayActivity : ComponentActivity() {
     private fun updateDisplayInfo(displayId: Int) {
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.getDisplay(displayId)?.let { display ->
-            val spec = DisplayUtils.getVirtualDisplaySpec(display)
+            val spec = displayMetricsManager.getVirtualDisplaySpec(display)
             val width = spec.width
             val height = spec.height
             if (videoWidth != width || videoHeight != height) {

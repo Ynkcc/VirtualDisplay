@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.ui.display.DisplayActivity
+import com.ynk.virtualdisplay.ui.main.MainIntent
 import com.ynk.virtualdisplay.ui.main.MainViewModel
 import com.ynk.virtualdisplay.ui.components.DisplayItem
 import com.ynk.virtualdisplay.ui.components.AppSelectionDialog
@@ -74,7 +75,7 @@ fun VirtualDisplayScreen(
     }
 
     LaunchedEffect(Unit) {
-        viewModel.refreshDisplays(context)
+        viewModel.handleIntent(MainIntent.RefreshDisplays)
     }
 
     // App Selection Dialog Handler
@@ -82,7 +83,7 @@ fun VirtualDisplayScreen(
         AppSelectionDialog(
             onDismiss = { showAppSelectionDialogForDisplayId = null },
             onAppSelected = { appInfo ->
-                viewModel.launchSelectedApp(context, displayId, appInfo.packageName)
+                viewModel.launchSelectedApp(appInfo.packageName, displayId)
                 showAppSelectionDialogForDisplayId = null
             }
         )
@@ -121,7 +122,7 @@ fun VirtualDisplayScreen(
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(
-                        onClick = { viewModel.forceRestartService(context) },
+                        onClick = { viewModel.handleIntent(MainIntent.RestartService) },
                         enabled = !uiState.isRestartCooldown && !uiState.isLoading,
                         colors = ButtonDefaults.textButtonColors(
                             contentColor = MaterialTheme.colorScheme.error
@@ -133,7 +134,7 @@ fun VirtualDisplayScreen(
                         )
                     }
                     IconButton(
-                        onClick = { viewModel.refreshDisplays(context) },
+                        onClick = { viewModel.handleIntent(MainIntent.RefreshDisplays) },
                         modifier = Modifier
                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
                             .size(36.dp)
@@ -251,7 +252,7 @@ fun VirtualDisplayScreen(
                                 }
                                 context.startActivity(intent)
                             },
-                            onDelete = { viewModel.releaseDisplay(displayInfo.id, context) },
+                            onDelete = { viewModel.handleIntent(MainIntent.ReleaseDisplay(displayInfo.id)) },
                             onLaunchApp = { showAppSelectionDialogForDisplayId = displayInfo.id }
                         )
                     }
@@ -321,7 +322,7 @@ fun VirtualDisplayScreen(
                         ) {
                             OutlinedTextField(
                                 value = uiState.inputWidth,
-                                onValueChange = { viewModel.updateInputs(width = it) },
+                                onValueChange = { viewModel.handleIntent(MainIntent.UpdateInputs(width = it)) },
                                 label = { Text("宽度") },
                                 modifier = Modifier.weight(1f),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -330,7 +331,7 @@ fun VirtualDisplayScreen(
                             )
                             OutlinedTextField(
                                 value = uiState.inputHeight,
-                                onValueChange = { viewModel.updateInputs(height = it) },
+                                onValueChange = { viewModel.handleIntent(MainIntent.UpdateInputs(height = it)) },
                                 label = { Text("高度") },
                                 modifier = Modifier.weight(1f),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -339,7 +340,7 @@ fun VirtualDisplayScreen(
                             )
                             OutlinedTextField(
                                 value = uiState.inputDpi,
-                                onValueChange = { viewModel.updateInputs(dpi = it) },
+                                onValueChange = { viewModel.handleIntent(MainIntent.UpdateInputs(dpi = it)) },
                                 label = { Text("DPI") },
                                 modifier = Modifier.weight(0.8f),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -374,11 +375,11 @@ fun VirtualDisplayScreen(
                                             shape = RoundedCornerShape(8.dp)
                                         )
                                         .clickable {
-                                            viewModel.updateInputs(
+                                            viewModel.handleIntent(MainIntent.UpdateInputs(
                                                 width = preset.width.toString(),
                                                 height = preset.height.toString(),
                                                 dpi = preset.dpi.toString()
-                                            )
+                                            ))
                                         }
                                         .padding(vertical = 8.dp),
                                     contentAlignment = Alignment.Center
@@ -409,7 +410,9 @@ fun VirtualDisplayScreen(
 
                             Button(
                                 onClick = {
-                                    viewModel.createVirtualDisplay(context)
+                                    viewModel.handleIntent(MainIntent.CreateDisplay(
+                                        uiState.inputWidth, uiState.inputHeight, uiState.inputDpi
+                                    ))
                                     showCreateDialog = false
                                 },
                                 modifier = Modifier.weight(1.5f),

@@ -1,136 +1,175 @@
 package com.ynk.virtualdisplay.ui.main
 
 import android.content.Context
-import android.content.pm.PackageManager
 import android.util.Log
 import android.view.Display
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.model.ShizukuState
-import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
-import com.ynk.virtualdisplay.util.DisplayUtils
+import com.ynk.virtualdisplay.domain.DisplayInteractor
+import com.ynk.virtualdisplay.manager.DisplayMetricsManager
+import com.ynk.virtualdisplay.manager.ShizukuManager
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import rikka.shizuku.Shizuku
 
+/**
+ * 主界面 ViewModel（MVI 模式）。
+ *
+ * 职责：
+ * - 持有 [MainUiState] 状态流，供 Compose UI 订阅
+ * - 通过 [handleIntent] 统一分发用户意图（MVI Intent）
+ * - 通过 [effect] 推送一次性副作用事件（Toast / Error）
+ * - 委派业务逻辑给 [DisplayInteractor]
+ * - 委派 Shizuku 状态管理给 [ShizukuManager]
+ * - 委派显示信息查询给 [DisplayMetricsManager]
+ *
+ * 构造参数全部通过 Koin 注入，无需手写 Factory。
+ */
 class MainViewModel(
-    val repository: IDisplayRepository,
-    context: Context
+    private val interactor: DisplayInteractor,
+    private val shizukuManager: ShizukuManager,
+    private val displayMetricsManager: DisplayMetricsManager,
+    private val context: Context
 ) : ViewModel() {
 
+    companion object {
+        private const val TAG = "MainViewModel"
+    }
+
     private val appContext = context.applicationContext
+
+    // === MVI State ===
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
-    private val displayListener = object : android.hardware.display.DisplayManager.DisplayListener {
-        override fun onDisplayAdded(displayId: Int) {
-            refreshDisplays(appContext)
-        }
-        override fun onDisplayRemoved(displayId: Int) {
-            refreshDisplays(appContext)
-        }
-        override fun onDisplayChanged(displayId: Int) {
-            refreshDisplays(appContext)
-        }
-    }
 
-    private val REQUEST_PERMISSION_RESULT_LISTENER = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
-        val granted = grantResult == PackageManager.PERMISSION_GRANTED
-        Log.d("MainViewModel", "Shizuku permission result: requestCode=$requestCode, granted=$granted")
-        _uiState.update { it.copy(
-            shizukuState = if (granted) ShizukuState.Ready else ShizukuState.PermissionDenied
-        ) }
-    }
+    // === MVI Effect ===
+    private val _effect = MutableSharedFlow<MainEffect>(extraBufferCapacity = 16)
+    val effect: SharedFlow<MainEffect> = _effect.asSharedFlow()
 
     init {
-        AppSettings.init(appContext)
-        Shizuku.addRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER)
-
-        val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
-        dm.registerDisplayListener(displayListener, null)
-        
-        // 订阅 Repository 状态
+        // 订阅 ShizukuManager 状态流
         viewModelScope.launch {
-            repository.connectionStatus.collect { status ->
+            shizukuManager.shizukuState.collect { state ->
+                _uiState.update { it.copy(shizukuState = state) }
+            }
+        }
+
+        // 订阅 Repository 连接状态
+        viewModelScope.launch {
+            interactor.connectionStatus.collect { status ->
                 _uiState.update { it.copy(connectionStatus = status) }
             }
         }
-        
+
+        // 订阅连接错误
         viewModelScope.launch {
-            repository.connectionError.collect { error ->
+            interactor.connectionError.collect { error ->
                 if (error != null) {
                     _uiState.update { it.copy(statusMessage = "连接错误: $error") }
                 }
             }
         }
-        
+
+        // 订阅 Daemon PID
         viewModelScope.launch {
-            repository.daemonPid.collect { pid ->
+            interactor.daemonPid.collect { pid ->
                 _uiState.update { it.copy(daemonPid = pid) }
             }
         }
-        
+
+        // 订阅管理中的显示器列表变化
         viewModelScope.launch {
-            repository.managedDisplayIds.collect { _ ->
-                refreshDisplays(appContext)
+            interactor.managedDisplayIds.collect {
+                refreshDisplaysInternal()
             }
         }
-
-
     }
 
-    fun switchTab(tab: ScreenTab) {
-        _uiState.update { it.copy(currentTab = tab) }
-        if (tab == ScreenTab.CONSOLE) {
-            reloadDefaultInputsFromSettings(appContext)
+    /**
+     * MVI 意图分发入口。所有用户操作都通过此方法进入。
+     */
+    fun handleIntent(intent: MainIntent) {
+        when (intent) {
+            is MainIntent.CheckShizuku -> checkShizuku()
+            is MainIntent.RequestShizukuPermission -> shizukuManager.requestPermission()
+            is MainIntent.RefreshDisplays -> refreshDisplays()
+            is MainIntent.SwitchTab -> {
+                _uiState.update { it.copy(currentTab = intent.tab) }
+                if (intent.tab == ScreenTab.CONSOLE) {
+                    reloadDefaultInputsFromSettings()
+                }
+            }
+            is MainIntent.CreateDisplay -> createVirtualDisplay(intent.width, intent.height, intent.dpi)
+            is MainIntent.ReleaseDisplay -> releaseDisplay(intent.displayId)
+            is MainIntent.LaunchApp -> launchSelectedApp(intent.packageName, intent.displayId)
+            is MainIntent.RestartService -> forceRestartService()
+            is MainIntent.UpdateInputs -> updateInputs(intent.width, intent.height, intent.dpi)
+            is MainIntent.BindService -> interactor.bindService()
+            is MainIntent.UnbindService -> interactor.unbindService()
         }
     }
 
-    private fun getDefaultDeviceSpec(context: Context): DisplayUtils.DisplaySpec {
-        return DisplayUtils.getDefaultDisplaySpec(context)
-            ?: DisplayUtils.DisplaySpec(1080, 1920, 420)
+    // === Shizuku 相关 ===
+
+    private fun checkShizuku() {
+        shizukuManager.refreshState()
+        checkAndInitDeviceMetrics()
+        if (shizukuManager.isAvailable()) {
+            interactor.bindService()
+        }
     }
 
-    fun reloadDefaultInputsFromSettings(context: Context) {
-        val deviceSpec = getDefaultDeviceSpec(context)
-        viewModelScope.launch {
-            val (defaultW, defaultH, defaultDpi) = AppSettings.getPrefDefaults(context)
-            _uiState.update { state ->
-                state.copy(
-                    inputWidth = defaultW.ifEmpty { deviceSpec.width.toString() },
-                    inputHeight = defaultH.ifEmpty { deviceSpec.height.toString() },
-                    inputDpi = defaultDpi.ifEmpty { deviceSpec.dpi.toString() }
+    // === 显示器列表刷新 ===
+
+    fun refreshDisplays() {
+        refreshDisplaysInternal()
+        checkAndInitDeviceMetrics()
+    }
+
+    private fun refreshDisplaysInternal() {
+        interactor.refreshDisplays()
+        val managedByService = interactor.managedDisplayIds.value
+
+        val displaysList = mutableListOf<DisplayInfoModel>()
+        val orphans = mutableListOf<Int>()
+
+        displayMetricsManager.getVirtualDisplays().forEach { display ->
+            val spec = displayMetricsManager.getVirtualDisplaySpec(display)
+            displaysList.add(
+                DisplayInfoModel(
+                    id = display.displayId,
+                    name = display.name,
+                    width = spec.width,
+                    height = spec.height
                 )
+            )
+            if (interactor.connectionStatus.value == ConnectionStatus.CONNECTED && display.displayId !in managedByService) {
+                orphans.add(display.displayId)
             }
         }
+
+        _uiState.update { it.copy(
+            displays = displaysList,
+            orphanDisplayIds = orphans,
+            statusMessage = if (it.statusMessage.startsWith("Error:")) it.statusMessage else "Displays refreshed"
+        ) }
     }
 
-    fun launchSelectedApp(context: Context, displayId: Int, packageName: String) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Launching $packageName on $displayId...") }
-            repository.launchApp(packageName, displayId)
-                .onSuccess {
-                    _uiState.update { it.copy(isLoading = false, statusMessage = "Launched $packageName") }
-                }
-                .onFailure { e ->
-                    Log.e("MainViewModel", "Failed to launch app", e)
-                    _uiState.update { it.copy(isLoading = false, statusMessage = "Launch failed: ${e.message}") }
-                }
-        }
-    }
+    // === 输入框默认值 ===
 
-    private fun checkAndInitDeviceMetrics(context: Context) {
-        val deviceSpec = getDefaultDeviceSpec(context)
+    private fun checkAndInitDeviceMetrics() {
+        val deviceSpec = displayMetricsManager.getDefaultDisplaySpec()
+            ?: DisplayMetricsManager.DisplaySpec(1080, 1920, 420)
         viewModelScope.launch {
-            val (defaultW, defaultH, defaultDpi) = AppSettings.getPrefDefaults(context)
+            val (defaultW, defaultH, defaultDpi) = AppSettings.getPrefDefaults(appContext)
             _uiState.update { state ->
                 state.copy(
                     inputWidth = state.inputWidth.ifEmpty { defaultW.ifEmpty { deviceSpec.width.toString() } },
@@ -141,34 +180,99 @@ class MainViewModel(
         }
     }
 
-    fun checkShizukuStatus(context: Context) {
-        checkAndInitDeviceMetrics(context)
-        if (!repository.isShizukuAvailable()) {
-            _uiState.update { it.copy(shizukuState = ShizukuState.NotRunning) }
+    fun reloadDefaultInputsFromSettings() {
+        checkAndInitDeviceMetrics()
+    }
+
+    // === 创建虚拟显示器 ===
+
+    private fun createVirtualDisplay(widthStr: String, heightStr: String, dpiStr: String) {
+        val w = widthStr.toIntOrNull() ?: 0
+        val h = heightStr.toIntOrNull() ?: 0
+        val d = dpiStr.toIntOrNull() ?: 0
+
+        if (w <= 0 || h <= 0 || d <= 0) {
+            _uiState.update { it.copy(statusMessage = "Error: Invalid dimensions or DPI") }
             return
         }
 
-        try {
-            if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
-                _uiState.update { it.copy(shizukuState = ShizukuState.Ready) }
-                repository.bindService(context)
-            } else {
-                _uiState.update { it.copy(shizukuState = ShizukuState.PermissionDenied) }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, statusMessage = "Creating display ${w}x${h}...") }
+            interactor.createDisplay(
+                name = "Shizuku_VD_${System.currentTimeMillis()}",
+                width = w,
+                height = h,
+                dpi = d
+            ).onSuccess { displayId ->
+                _uiState.update { it.copy(isLoading = false, statusMessage = "Created Display ID: $displayId") }
+                refreshDisplays()
+            }.onFailure { e ->
+                Log.e(TAG, "Failed to create display", e)
+                _uiState.update { it.copy(isLoading = false, statusMessage = "Error: ${e.message}") }
             }
-        } catch (e: IllegalStateException) {
-            Log.w("MainViewModel", "Shizuku not attached yet, waiting for binder...", e)
-            _uiState.update { it.copy(shizukuState = ShizukuState.Checking) }
-            val listener = object : Shizuku.OnBinderReceivedListener {
-                override fun onBinderReceived() {
-                    Shizuku.removeBinderReceivedListener(this)
-                    checkShizukuStatus(context)
-                }
-            }
-            Shizuku.addBinderReceivedListener(listener)
         }
     }
 
-    fun updateInputs(width: String? = null, height: String? = null, dpi: String? = null) {
+    // === 释放显示器 ===
+
+    private fun releaseDisplay(displayId: Int) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, statusMessage = "Releasing display $displayId...") }
+            interactor.releaseDisplay(displayId)
+                .onSuccess {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Released $displayId") }
+                    refreshDisplays()
+                }
+                .onFailure { e ->
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Release failed: ${e.message}") }
+                }
+        }
+    }
+
+    // === 启动应用 ===
+
+    fun launchSelectedApp(packageName: String, displayId: Int) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, statusMessage = "Launching $packageName on $displayId...") }
+            interactor.launchApp(packageName, displayId)
+                .onSuccess {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Launched $packageName") }
+                }
+                .onFailure { e ->
+                    Log.e(TAG, "Failed to launch app", e)
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Launch failed: ${e.message}") }
+                }
+        }
+    }
+
+    // === 重启服务 ===
+
+    private fun forceRestartService() {
+        if (_uiState.value.isRestartCooldown) return
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, isRestartCooldown = true, statusMessage = "重启守护进程...") }
+            try {
+                interactor.restartDaemon()
+                    .onSuccess {
+                        _uiState.update { it.copy(isLoading = false, statusMessage = "守护进程已重启") }
+                    }
+                    .onFailure { e ->
+                        _uiState.update { it.copy(isLoading = false, statusMessage = "重启失败: ${e.message}") }
+                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to restart service", e)
+                _uiState.update { it.copy(isLoading = false, statusMessage = "重启失败: ${e.message}") }
+            } finally {
+                kotlinx.coroutines.delay(2000)
+                _uiState.update { it.copy(isRestartCooldown = false) }
+            }
+        }
+    }
+
+    // === 更新输入框 ===
+
+    private fun updateInputs(width: String?, height: String?, dpi: String?) {
         _uiState.update { state ->
             state.copy(
                 inputWidth = width ?: state.inputWidth,
@@ -178,134 +282,10 @@ class MainViewModel(
         }
     }
 
-    fun createVirtualDisplay(context: Context) {
-        val state = _uiState.value
-        val w = state.inputWidth.toIntOrNull() ?: 0
-        val h = state.inputHeight.toIntOrNull() ?: 0
-        val d = state.inputDpi.toIntOrNull() ?: 0
-
-        if (w <= 0 || h <= 0 || d <= 0) {
-            _uiState.update { it.copy(statusMessage = "Error: Invalid dimensions or DPI") }
-            return
-        }
-
-        // 校验比例：长宽比/宽长比 =< 2.5
-        val ratio = if (w > h) w.toFloat() / h else h.toFloat() / w
-        if (ratio > 2.5f) {
-            _uiState.update { it.copy(statusMessage = "Error: Aspect ratio too extreme (max 2.5, current ${String.format(java.util.Locale.US, "%.2f", ratio)})") }
-            return
-        }
-
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Creating display ${w}x${h}...") }
-            repository.createDisplay(
-                name = "Shizuku_VD_${System.currentTimeMillis()}",
-                width = w,
-                height = h,
-                dpi = d
-            ).onSuccess { displayId ->
-                _uiState.update { it.copy(
-                    isLoading = false, 
-                    statusMessage = "Created Display ID: $displayId"
-                ) }
-                refreshDisplays(context)
-            }.onFailure { e ->
-                Log.e("MainViewModel", "Failed to create display", e)
-                _uiState.update { it.copy(
-                    isLoading = false,
-                    statusMessage = "Error: ${e.message}"
-                ) }
-            }
-        }
-    }
-
-    fun refreshDisplays(context: Context) {
-        repository.refreshDisplays()
-        checkAndInitDeviceMetrics(context)
-        val dm = context.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
-        val managedByService = repository.managedDisplayIds.value
-
-        
-        val displaysList = mutableListOf<DisplayInfoModel>()
-        val orphans = mutableListOf<Int>()
-        
-        dm.displays.forEach { display ->
-            if (display.displayId != Display.DEFAULT_DISPLAY) {
-                val spec = DisplayUtils.getVirtualDisplaySpec(display)
-                displaysList.add(
-                    DisplayInfoModel(
-                        id = display.displayId,
-                        name = display.name,
-                        width = spec.width,
-                        height = spec.height
-                    )
-                )
-                if (repository.connectionStatus.value == ConnectionStatus.CONNECTED && display.displayId !in managedByService) {
-                    orphans.add(display.displayId)
-                }
-            }
-        }
-        
-        _uiState.update { it.copy(
-            displays = displaysList,
-            orphanDisplayIds = orphans,
-            statusMessage = if (it.statusMessage.startsWith("Error:")) it.statusMessage else "Displays refreshed"
-        ) }
-    }
-
-    fun releaseDisplay(displayId: Int, context: Context) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Releasing display $displayId...") }
-            repository.releaseDisplay(displayId)
-                .onSuccess {
-                    _uiState.update { it.copy(isLoading = false, statusMessage = "Released $displayId") }
-                    refreshDisplays(context)
-                }
-                .onFailure { e ->
-                    _uiState.update { it.copy(isLoading = false, statusMessage = "Release failed: ${e.message}") }
-                }
-        }
-    }
-
-    fun forceRestartService(context: Context) {
-        if (_uiState.value.isRestartCooldown) return
-
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, isRestartCooldown = true, statusMessage = "重启守护进程...") }
-            try {
-                repository.unbindService()
-                kotlinx.coroutines.delay(500)
-                repository.bindService(context)
-                _uiState.update { it.copy(isLoading = false, statusMessage = "守护进程已重启") }
-            } catch (e: Exception) {
-                Log.e("MainViewModel", "Failed to restart service", e)
-                _uiState.update { it.copy(isLoading = false, statusMessage = "重启失败: ${e.message}") }
-            } finally {
-                // 重启结束后延迟 2 秒后解除冷却状态
-                kotlinx.coroutines.delay(2000)
-                _uiState.update { it.copy(isRestartCooldown = false) }
-            }
-        }
-    }
-
-
+    // === 生命周期 ===
 
     override fun onCleared() {
-        val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
-        dm.unregisterDisplayListener(displayListener)
-        Shizuku.removeRequestPermissionResultListener(REQUEST_PERMISSION_RESULT_LISTENER)
-    }
-}
-
-class MainViewModelFactory(
-    private val repository: IDisplayRepository,
-    private val context: Context
-) : androidx.lifecycle.ViewModelProvider.Factory {
-    override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
-            @Suppress("UNCHECKED_CAST")
-            return MainViewModel(repository, context) as T
-        }
-        throw IllegalArgumentException("Unknown ViewModel class")
+        super.onCleared()
+        interactor.unbindService()
     }
 }

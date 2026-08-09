@@ -5,12 +5,12 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Scaffold
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -22,103 +22,161 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import org.koin.androidx.compose.koinViewModel
 import com.ynk.virtualdisplay.MyApplication
 import com.ynk.virtualdisplay.data.model.ShizukuState
-import com.ynk.virtualdisplay.data.repository.IDisplayRepository
+import com.ynk.virtualdisplay.manager.ShizukuManager
 import com.ynk.virtualdisplay.ui.screens.SettingsScreen
 import com.ynk.virtualdisplay.ui.screens.ShizukuPermissionScreen
 import com.ynk.virtualdisplay.ui.screens.VirtualDisplayScreen
 import com.ynk.virtualdisplay.ui.theme.MyApplicationTheme
+import org.koin.android.ext.android.inject
 import rikka.shizuku.Shizuku
 import rikka.sui.Sui
 
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: MainViewModel by viewModels {
-        MainViewModelFactory((application as MyApplication).displayRepository, applicationContext)
+    companion object {
+        private const val TAG = "MainActivity"
     }
+
+    private val shizukuManager: ShizukuManager by inject()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         try {
             if (Sui.init(packageName)) {
-                Log.i("MainActivity", "Sui initialized successfully")
+                Log.i(TAG, "Sui initialized successfully")
             }
         } catch (e: Throwable) {
-            Log.e("MainActivity", "Sui init failed", e)
+            Log.e(TAG, "Sui init failed", e)
         }
 
-        viewModel.checkShizukuStatus(this)
+        // 首次检查 Shizuku 状态
+        shizukuManager.refreshState()
 
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
-                val uiState by viewModel.uiState.collectAsState()
-                
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    bottomBar = {
-                        if (uiState.shizukuState is ShizukuState.Ready) {
-                            NavigationBar {
-                                NavigationBarItem(
-                                    selected = uiState.currentTab == ScreenTab.CONSOLE,
-                                    onClick = { viewModel.switchTab(ScreenTab.CONSOLE) },
-                                    icon = { Icon(Icons.Default.Home, contentDescription = "控制台") },
-                                    label = { Text("控制台") }
-                                )
-                                NavigationBarItem(
-                                    selected = uiState.currentTab == ScreenTab.SETTINGS,
-                                    onClick = { viewModel.switchTab(ScreenTab.SETTINGS) },
-                                    icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
-                                    label = { Text("设置") }
-                                )
-                            }
+                MainScreen(
+                    shizukuManager = shizukuManager,
+                    onShizukuReady = {
+                        // Shizuku 就绪时加载 appModule（两阶段启动的第二阶段）
+                        (application as MyApplication).bootstrapCore()
+                    },
+                    onRequestPermission = {
+                        try {
+                            Shizuku.requestPermission(ShizukuManager.REQUEST_CODE)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to request permission", e)
                         }
+                    },
+                    onRetryCheck = {
+                        shizukuManager.refreshState()
                     }
-                ) { innerPadding ->
-                    Box(modifier = Modifier.padding(innerPadding)) {
-                        when (val state = uiState.shizukuState) {
-                            is ShizukuState.Checking -> {
-                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    CircularProgressIndicator()
-                                }
-                            }
-                            is ShizukuState.Ready -> {
-                                when (uiState.currentTab) {
-                                    ScreenTab.CONSOLE -> VirtualDisplayScreen(viewModel = viewModel)
-                                    ScreenTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
-                                }
-                            }
-                            else -> {
-                                ShizukuPermissionScreen(
-                                    state = state,
-                                    onRetry = { viewModel.checkShizukuStatus(this@MainActivity) },
-                                    onRequestPermission = {
-                                        try {
-                                            Shizuku.requestPermission(IDisplayRepository.REQUEST_CODE)
-                                        } catch (e: Exception) {
-                                            Log.e("MainActivity", "Failed to request permission", e)
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                        
-                        if (uiState.isLoading) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator()
-                            }
-                        }
-                    }
-                }
+                )
             }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d("MainActivity", "onDestroy: unbinding service")
-        (application as MyApplication).displayRepository.unbindService()
+        // ViewModel.onCleared 会处理 unbindService
+    }
+}
+
+@Composable
+private fun MainScreen(
+    shizukuManager: ShizukuManager,
+    onShizukuReady: () -> Unit,
+    onRequestPermission: () -> Unit,
+    onRetryCheck: () -> Unit
+) {
+    val shizukuState by shizukuManager.shizukuState.collectAsState()
+
+    // 当 Shizuku 变为 Ready 时，触发 bootstrapCore 加载 appModule
+    var bootstrapTriggered by remember { mutableStateOf(false) }
+    LaunchedEffect(shizukuState) {
+        if (shizukuState is ShizukuState.Ready && !bootstrapTriggered) {
+            bootstrapTriggered = true
+            onShizukuReady()
+        }
+    }
+
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        bottomBar = {
+            if (shizukuState is ShizukuState.Ready && bootstrapTriggered) {
+                // MainViewModel 只有在 bootstrapTriggered=true 后才能安全获取
+                val viewModel: MainViewModel = koinViewModel()
+                val uiState by viewModel.uiState.collectAsState()
+                if (uiState.shizukuState is ShizukuState.Ready) {
+                    NavigationBar {
+                        NavigationBarItem(
+                            selected = uiState.currentTab == ScreenTab.CONSOLE,
+                            onClick = { viewModel.handleIntent(MainIntent.SwitchTab(ScreenTab.CONSOLE)) },
+                            icon = { Icon(Icons.Default.Home, contentDescription = "控制台") },
+                            label = { Text("控制台") }
+                        )
+                        NavigationBarItem(
+                            selected = uiState.currentTab == ScreenTab.SETTINGS,
+                            onClick = { viewModel.handleIntent(MainIntent.SwitchTab(ScreenTab.SETTINGS)) },
+                            icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
+                            label = { Text("设置") }
+                        )
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Box(modifier = Modifier.padding(innerPadding)) {
+            when (shizukuState) {
+                is ShizukuState.Checking -> {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                }
+                is ShizukuState.Ready -> {
+                    if (bootstrapTriggered) {
+                        // appModule 已加载，可以安全获取 MainViewModel
+                        val viewModel: MainViewModel = koinViewModel()
+                        val uiState by viewModel.uiState.collectAsState()
+
+                        // 首次进入时检查 Shizuku 并绑定服务
+                        LaunchedEffect(Unit) {
+                            viewModel.handleIntent(MainIntent.CheckShizuku)
+                        }
+
+                        when (uiState.currentTab) {
+                            ScreenTab.CONSOLE -> VirtualDisplayScreen(viewModel = viewModel)
+                            ScreenTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
+                        }
+
+                        if (uiState.isLoading) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                    } else {
+                        // bootstrapCore 正在加载中
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                }
+                else -> {
+                    ShizukuPermissionScreen(
+                        state = shizukuState,
+                        onRetry = onRetryCheck,
+                        onRequestPermission = onRequestPermission
+                    )
+                }
+            }
+        }
     }
 }
