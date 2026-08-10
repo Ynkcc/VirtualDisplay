@@ -339,6 +339,7 @@ class DisplayActivity : ComponentActivity() {
     }
 
     private fun onVideoConfigChanged(width: Int, height: Int) {
+        Log.i(TAG, "onVideoConfigChanged: ${width}x${height}")
         videoWidth = width
         videoHeight = height
         inputController.updateVideoSize(width, height)
@@ -347,6 +348,8 @@ class DisplayActivity : ComponentActivity() {
         val viewW = rootLayout.width
         val viewH = rootLayout.height
         if (viewW > 0 && viewH > 0) {
+            // 根据宽高比自动调整旋转角度
+            // 如果画面变横屏（w > h）但 Activity 还是竖屏（w < h），则需要旋转
             val needRotate = (width > height) != (viewW > viewH)
             currentVideoRotation = if (needRotate) 90 else 0
             inputController.setVideoRotation(currentVideoRotation)
@@ -354,7 +357,6 @@ class DisplayActivity : ComponentActivity() {
         }
 
         applyOrientationForVideo(width, height)
-        Log.i(TAG, "Video config changed: ${width}x${height}, rotation=$currentVideoRotation")
     }
 
     private fun updateDisplayInfo(displayId: Int) {

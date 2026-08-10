@@ -121,17 +121,28 @@ class VideoSurfaceView @JvmOverloads constructor(
         val videoAspect = videoWidth.toFloat() / videoHeight.toFloat()
         val availAspect = availWidth.toFloat() / availHeight.toFloat()
 
-        val targetWidth: Int
-        val targetHeight: Int
+        var targetWidth: Int
+        var targetHeight: Int
         if (videoAspect > availAspect) {
-            // 画面相对更宽：以控件宽度为基准，缩放后画面较长边==控件较长边（横向）
+            // 画面相对更宽：以控件宽度为基准
             targetWidth = availWidth
             targetHeight = (availWidth / videoAspect).toInt()
         } else {
-            // 画面相对更高：以控件高度为基准，缩放后画面较长边==控件较长边（纵向）
+            // 画面相对更高：以控件高度为基准
             targetHeight = availHeight
             targetWidth = (availHeight * videoAspect).toInt()
         }
+
+        // 最终检查：确保计算出的尺寸不超出容器限制
+        if (targetWidth > availWidth) {
+            targetWidth = availWidth
+            targetHeight = (availWidth / videoAspect).toInt()
+        }
+        if (targetHeight > availHeight) {
+            targetHeight = availHeight
+            targetWidth = (availHeight * videoAspect).toInt()
+        }
+
         setMeasuredDimension(targetWidth, targetHeight)
     }
 
