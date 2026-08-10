@@ -339,7 +339,7 @@ fun VirtualDisplayScreen(
 
             // 4. 显示器列表头部
             Text(
-                text = "活跃屏幕列表",
+                text = "屏幕列表",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 8.dp)
@@ -385,7 +385,17 @@ fun VirtualDisplayScreen(
                                 context.startActivity(intent)
                             },
                             onDelete = { viewModel.handleIntent(MainIntent.ReleaseDisplay(displayInfo.id)) },
-                            onLaunchApp = { showAppSelectionDialogForDisplayId = displayInfo.id }
+                            onLaunchApp = { showAppSelectionDialogForDisplayId = displayInfo.id },
+                            onMirror = {
+                                viewModel.handleIntent(
+                                    MainIntent.CreateDisplay(
+                                        width = displayInfo.width.toString(),
+                                        height = displayInfo.height.toString(),
+                                        dpi = displayInfo.dpi.toString(),
+                                        mirrorDisplayId = displayInfo.id
+                                    )
+                                )
+                            }
                         )
                     }
                 }

@@ -10,7 +10,9 @@ data class DisplayInfoModel(
     val id: Int,
     val name: String,
     val width: Int,
-    val height: Int
+    val height: Int,
+    val dpi: Int,
+    val mirrorDisplayId: Int = -1
 )
 
 enum class ScreenTab {
@@ -58,7 +60,7 @@ sealed class MainIntent {
     /** 切换 Tab */
     data class SwitchTab(val tab: ScreenTab) : MainIntent()
     /** 创建虚拟显示器 */
-    data class CreateDisplay(val width: String, val height: String, val dpi: String) : MainIntent()
+    data class CreateDisplay(val width: String, val height: String, val dpi: String, val mirrorDisplayId: Int = -1) : MainIntent()
     /** 释放显示器 */
     data class ReleaseDisplay(val displayId: Int) : MainIntent()
     /** 在显示器上启动应用 */

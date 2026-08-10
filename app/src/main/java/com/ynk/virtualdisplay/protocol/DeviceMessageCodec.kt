@@ -53,7 +53,9 @@ object DeviceMessageCodec {
             val height = input.readInt()
             val dpi = input.readInt()
             val rotation = input.readInt()
-            displays.add(DeviceMessage.DisplayInfoEntry(displayId, width, height, dpi, rotation))
+            val mirrorDisplayId = input.readInt()
+            val isOwned = input.readByte().toInt() != 0
+            displays.add(DeviceMessage.DisplayInfoEntry(displayId, width, height, dpi, rotation, mirrorDisplayId, isOwned))
         }
         return DeviceMessage.ActiveDisplayInfosResponse(sequence, displays)
     }

@@ -7,6 +7,7 @@ import android.view.InputEvent
 import android.view.Surface
 import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.PrivilegeMode
+import com.ynk.virtualdisplay.data.model.SavedDisplay
 import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
 import com.ynk.virtualdisplay.data.process.DaemonProcessDataSource
 import com.ynk.virtualdisplay.data.remote.DaemonRemoteDataSource
@@ -365,10 +366,49 @@ class DaemonDisplayRepository(
             } else {
                 _daemonPid.value = -1
             }
-            // 获取显示器列表 → Remote DataSource
-            val result = remoteDataSource.getActiveDisplayIds()
-            result.onSuccess { ids ->
-                _managedDisplayIds.value = ids.toSet()
+            // 获取显示器详情列表 → Remote DataSource
+            val result = remoteDataSource.getActiveDisplayInfos()
+            result.onSuccess { displayInfos ->
+                val saved = AppSettings.getDisplaysForServer(context, currentNode)
+                val activeInfosMap = displayInfos.associateBy { it.displayId }
+                val activeIdsSet = activeInfosMap.keys
+                
+                val updatedSaved = saved.filter { it.id in activeIdsSet }.toMutableList()
+                val savedIds = updatedSaved.map { it.id }.toSet()
+                
+                activeInfosMap.forEach { (id, info) ->
+                    if (id !in savedIds) {
+                        updatedSaved.add(SavedDisplay(
+                            id = id,
+                            name = if (id == 0) "主屏幕" else "Virtual Display $id",
+                            width = info.width,
+                            height = info.height,
+                            dpi = info.dpi,
+                            mirrorDisplayId = info.mirrorDisplayId,
+                            isOwned = info.isOwned
+                        ))
+                    } else {
+                        val idx = updatedSaved.indexOfFirst { it.id == id }
+                        if (idx >= 0) {
+                            val old = updatedSaved[idx]
+                            if (old.mirrorDisplayId != info.mirrorDisplayId || old.width != info.width || old.height != info.height || old.dpi != info.dpi || old.isOwned != info.isOwned) {
+                                updatedSaved[idx] = old.copy(
+                                    width = info.width,
+                                    height = info.height,
+                                    dpi = info.dpi,
+                                    mirrorDisplayId = info.mirrorDisplayId,
+                                    isOwned = info.isOwned
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                AppSettings.setDisplaysForServer(context, currentNode, updatedSaved)
+                
+                // managedDisplayIds 应当仅包含服务端自己创建/接管的虚拟显示器 (即 isOwned 为 true 的)
+                val activeOwnedIdsSet = displayInfos.filter { it.isOwned }.map { it.displayId }.toSet()
+                _managedDisplayIds.value = activeOwnedIdsSet
             }.onFailure {
                 Log.w(TAG, "refreshManagedDisplays failed", it)
                 _managedDisplayIds.value = emptySet()
@@ -376,12 +416,16 @@ class DaemonDisplayRepository(
         }
     }
 
-    override suspend fun createDisplay(name: String, width: Int, height: Int, dpi: Int, flags: Int): Result<Int> {
+    override suspend fun createDisplay(name: String, width: Int, height: Int, dpi: Int, flags: Int, mirrorDisplayId: Int): Result<Int> {
         val finalFlags = if (flags != 0) flags else 0
-        Log.d(TAG, "createDisplay: name=$name, width=$width, height=$height, dpi=$dpi, flags=0x${Integer.toHexString(finalFlags)}")
+        Log.d(TAG, "createDisplay: name=$name, width=$width, height=$height, dpi=$dpi, flags=0x${Integer.toHexString(finalFlags)}, mirrorDisplayId=$mirrorDisplayId")
         // 创建显示器 → Remote DataSource
-        val result = remoteDataSource.createDisplay(name, width, height, dpi, finalFlags)
-        result.onSuccess { refreshManagedDisplays() }
+        val result = remoteDataSource.createDisplay(name, width, height, dpi, finalFlags, mirrorDisplayId)
+        result.onSuccess { displayId ->
+            val currentNode = AppSettings.getCurrentServerNodeSync()
+            AppSettings.saveDisplayForServer(context, currentNode, SavedDisplay(displayId, name, width, height, dpi, mirrorDisplayId))
+            refreshManagedDisplays()
+        }
         return result
     }
 
@@ -389,6 +433,9 @@ class DaemonDisplayRepository(
         // 释放显示器 → Remote DataSource
         val result = remoteDataSource.releaseDisplay(displayId)
         result.onSuccess {
+            val currentNode = AppSettings.getCurrentServerNodeSync()
+            AppSettings.removeDisplayForServer(context, currentNode, displayId)
+            
             if (currentStreamingDisplayId == displayId) {
                 videoController.stop(force = true)
                 currentStreamingDisplayId = -1

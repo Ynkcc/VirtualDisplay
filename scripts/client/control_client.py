@@ -174,19 +174,21 @@ class ControlClient:
                 "display_ids": ids,
             }
         elif resp_type == TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS:
-            # 协议字段: seq(8B), count(4B), count × [id,w,h,dpi,rotation](5×4B)
+            # 协议字段: seq(8B), count(4B), count × [id,w,h,dpi,rotation,mirror_id,owned](6×4B + 1B) = 25 字节
             data = self._recv_exact(12)
             seq, count = struct.unpack(">qi", data)
             displays = []
             for _ in range(count):
-                entry = self._recv_exact(20)
-                did, w, h, dpi, rot = struct.unpack(">iiiii", entry)
+                entry = self._recv_exact(25)
+                did, w, h, dpi, rot, m_id, owned = struct.unpack(">iiiiiiB", entry)
                 displays.append({
                     "display_id": did,
                     "width": w,
                     "height": h,
                     "dpi": dpi,
                     "rotation": rot,
+                    "mirror_display_id": m_id,
+                    "is_owned": owned != 0,
                 })
             return {
                 "type": resp_type,
@@ -253,12 +255,12 @@ class ControlClient:
     # === Daemon 控制命令接口 ===
 
     def create_virtual_display(
-        self, name: str, width: int, height: int, dpi: int, flags: int
+        self, name: str, width: int, height: int, dpi: int, flags: int, display_id: int = -1
     ) -> Dict[str, Any]:
         """TYPE 201: 创建虚拟显示器。"""
         name_bytes = name.encode("utf-8")
         payload = struct.pack(">i", len(name_bytes)) + name_bytes
-        payload += struct.pack(">iiii", width, height, dpi, flags)
+        payload += struct.pack(">iiiii", width, height, dpi, flags, display_id)
         return self.request(TYPE_CREATE_VIRTUAL_DISPLAY, payload)
 
     def release_virtual_display(self, display_id: int) -> Dict[str, Any]:

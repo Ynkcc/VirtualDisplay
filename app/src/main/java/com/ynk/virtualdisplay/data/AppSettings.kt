@@ -18,7 +18,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import com.ynk.virtualdisplay.data.model.SavedDisplay
 
 enum class PrivilegeMode {
     SHIZUKU,
@@ -32,6 +35,10 @@ data class ServerNode(
     val port: Int,
     val password: String = ""
 ) {
+    fun uniqueKey(): String {
+        return "${host.replace(".", "_")}_$port"
+    }
+
     fun toSerializedString(): String {
         return "$name|$host|$port|$password"
     }
@@ -81,6 +88,7 @@ object AppSettings {
     val currentServerNodeKey = stringPreferencesKey("current_server_node")
     val privilegeModeKey = stringPreferencesKey("privilege_mode")
     val autoStartServerKey = booleanPreferencesKey("auto_start_server")
+    val ultraLowLatencyKey = booleanPreferencesKey("ultra_low_latency")
 
     private val _captureBackCache = MutableStateFlow(false)
     val captureBackCache: StateFlow<Boolean> = _captureBackCache
@@ -97,6 +105,9 @@ object AppSettings {
     private val _autoStartServerCache = MutableStateFlow(true)
     val autoStartServerCache: StateFlow<Boolean> = _autoStartServerCache
 
+    private val _ultraLowLatencyCache = MutableStateFlow(false)
+    val ultraLowLatencyCache: StateFlow<Boolean> = _ultraLowLatencyCache
+
     @Volatile
     private var initialized = false
 
@@ -110,7 +121,8 @@ object AppSettings {
                 _captureBackCache.value = prefs[captureBackKey] ?: false
                 _showPerformanceStatsCache.value = prefs[showPerformanceStatsKey] ?: true
                 _autoStartServerCache.value = prefs[autoStartServerKey] ?: true
-                
+                _ultraLowLatencyCache.value = prefs[ultraLowLatencyKey] ?: false
+
                 val modeStr = prefs[privilegeModeKey] ?: PrivilegeMode.SHIZUKU.name
                 _privilegeModeCache.value = try {
                     PrivilegeMode.valueOf(modeStr)
@@ -191,91 +203,186 @@ object AppSettings {
         context.applicationContext.dataStore.edit { it[captureBackKey] = enabled }
     }
 
+    fun prefDefaultWidthFlow(context: Context, node: ServerNode): Flow<String> {
+        val key = stringPreferencesKey("pref_default_width_${node.uniqueKey()}")
+        return context.applicationContext.dataStore.data.map { prefs ->
+            prefs[key] ?: ""
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun prefDefaultWidthFlow(context: Context): Flow<String> {
-        return context.applicationContext.dataStore.data.map { prefs ->
-            prefs[prefDefaultWidthKey] ?: ""
+        return _currentServerNodeCache.flatMapLatest { node ->
+            prefDefaultWidthFlow(context, node)
         }
     }
 
+    fun prefDefaultHeightFlow(context: Context, node: ServerNode): Flow<String> {
+        val key = stringPreferencesKey("pref_default_height_${node.uniqueKey()}")
+        return context.applicationContext.dataStore.data.map { prefs ->
+            prefs[key] ?: ""
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun prefDefaultHeightFlow(context: Context): Flow<String> {
-        return context.applicationContext.dataStore.data.map { prefs ->
-            prefs[prefDefaultHeightKey] ?: ""
+        return _currentServerNodeCache.flatMapLatest { node ->
+            prefDefaultHeightFlow(context, node)
         }
     }
 
+    fun prefDefaultDpiFlow(context: Context, node: ServerNode): Flow<String> {
+        val key = stringPreferencesKey("pref_default_dpi_${node.uniqueKey()}")
+        return context.applicationContext.dataStore.data.map { prefs ->
+            prefs[key] ?: ""
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun prefDefaultDpiFlow(context: Context): Flow<String> {
-        return context.applicationContext.dataStore.data.map { prefs ->
-            prefs[prefDefaultDpiKey] ?: ""
+        return _currentServerNodeCache.flatMapLatest { node ->
+            prefDefaultDpiFlow(context, node)
         }
     }
 
-    suspend fun getPrefDefaults(context: Context): Triple<String, String, String> {
+    suspend fun getPrefDefaults(context: Context, node: ServerNode): Triple<String, String, String> {
+        val widthKey = stringPreferencesKey("pref_default_width_${node.uniqueKey()}")
+        val heightKey = stringPreferencesKey("pref_default_height_${node.uniqueKey()}")
+        val dpiKey = stringPreferencesKey("pref_default_dpi_${node.uniqueKey()}")
         val prefs = context.applicationContext.dataStore.data.first()
         return Triple(
-            prefs[prefDefaultWidthKey] ?: "",
-            prefs[prefDefaultHeightKey] ?: "",
-            prefs[prefDefaultDpiKey] ?: ""
+            prefs[widthKey] ?: "",
+            prefs[heightKey] ?: "",
+            prefs[dpiKey] ?: ""
         )
     }
 
+    suspend fun getPrefDefaults(context: Context): Triple<String, String, String> {
+        val node = getCurrentServerNodeSync()
+        return getPrefDefaults(context, node)
+    }
+
+    suspend fun setPrefDefaultWidth(context: Context, node: ServerNode, value: String) {
+        val key = stringPreferencesKey("pref_default_width_${node.uniqueKey()}")
+        context.applicationContext.dataStore.edit { it[key] = value }
+    }
+
     suspend fun setPrefDefaultWidth(context: Context, value: String) {
-        context.applicationContext.dataStore.edit { it[prefDefaultWidthKey] = value }
+        val node = getCurrentServerNodeSync()
+        setPrefDefaultWidth(context, node, value)
+    }
+
+    suspend fun setPrefDefaultHeight(context: Context, node: ServerNode, value: String) {
+        val key = stringPreferencesKey("pref_default_height_${node.uniqueKey()}")
+        context.applicationContext.dataStore.edit { it[key] = value }
     }
 
     suspend fun setPrefDefaultHeight(context: Context, value: String) {
-        context.applicationContext.dataStore.edit { it[prefDefaultHeightKey] = value }
+        val node = getCurrentServerNodeSync()
+        setPrefDefaultHeight(context, node, value)
+    }
+
+    suspend fun setPrefDefaultDpi(context: Context, node: ServerNode, value: String) {
+        val key = stringPreferencesKey("pref_default_dpi_${node.uniqueKey()}")
+        context.applicationContext.dataStore.edit { it[key] = value }
     }
 
     suspend fun setPrefDefaultDpi(context: Context, value: String) {
-        context.applicationContext.dataStore.edit { it[prefDefaultDpiKey] = value }
+        val node = getCurrentServerNodeSync()
+        setPrefDefaultDpi(context, node, value)
     }
 
-    fun flagFlow(context: Context, key: String, defaultValue: Boolean): Flow<Boolean> {
-        val prefsKey = booleanPreferencesKey(key)
+    fun flagFlow(context: Context, key: String, defaultValue: Boolean, node: ServerNode): Flow<Boolean> {
+        val prefsKey = booleanPreferencesKey("${key}_${node.uniqueKey()}")
         return context.applicationContext.dataStore.data.map { prefs ->
             prefs[prefsKey] ?: defaultValue
         }
     }
 
-    suspend fun getFlags(context: Context): Map<String, Boolean> {
-        val prefs = context.applicationContext.dataStore.data.first()
-        return ALL_DISPLAY_FLAGS.associate { flag ->
-            flag.key to (prefs[booleanPreferencesKey(flag.key)] ?: flag.isDefaultEnabled)
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun flagFlow(context: Context, key: String, defaultValue: Boolean): Flow<Boolean> {
+        return _currentServerNodeCache.flatMapLatest { node ->
+            flagFlow(context, key, defaultValue, node)
         }
     }
 
-    suspend fun setFlag(context: Context, key: String, enabled: Boolean) {
-        context.applicationContext.dataStore.edit { it[booleanPreferencesKey(key)] = enabled }
+    suspend fun getFlags(context: Context, node: ServerNode): Map<String, Boolean> {
+        val prefs = context.applicationContext.dataStore.data.first()
+        return ALL_DISPLAY_FLAGS.associate { flag ->
+            val key = booleanPreferencesKey("${flag.key}_${node.uniqueKey()}")
+            flag.key to (prefs[key] ?: flag.isDefaultEnabled)
+        }
     }
 
-    suspend fun resetAllFlagsToDefault(context: Context) {
+    suspend fun getFlags(context: Context): Map<String, Boolean> {
+        val node = getCurrentServerNodeSync()
+        return getFlags(context, node)
+    }
+
+    suspend fun setFlag(context: Context, node: ServerNode, key: String, enabled: Boolean) {
+        val prefsKey = booleanPreferencesKey("${key}_${node.uniqueKey()}")
+        context.applicationContext.dataStore.edit { it[prefsKey] = enabled }
+    }
+
+    suspend fun setFlag(context: Context, key: String, enabled: Boolean) {
+        val node = getCurrentServerNodeSync()
+        setFlag(context, node, key, enabled)
+    }
+
+    suspend fun resetAllFlagsToDefault(context: Context, node: ServerNode) {
         context.applicationContext.dataStore.edit { prefs ->
             ALL_DISPLAY_FLAGS.forEach { flag ->
-                prefs[booleanPreferencesKey(flag.key)] = flag.isDefaultEnabled
+                val key = booleanPreferencesKey("${flag.key}_${node.uniqueKey()}")
+                prefs[key] = flag.isDefaultEnabled
             }
         }
     }
 
-    suspend fun recentApps(context: Context): List<String> {
-        val raw = context.applicationContext.dataStore.data.first()[recentAppsKey] ?: ""
+    suspend fun resetAllFlagsToDefault(context: Context) {
+        val node = getCurrentServerNodeSync()
+        resetAllFlagsToDefault(context, node)
+    }
+
+    suspend fun recentApps(context: Context, node: ServerNode): List<String> {
+        val key = stringPreferencesKey("recent_apps_${node.uniqueKey()}")
+        val raw = context.applicationContext.dataStore.data.first()[key] ?: ""
         return if (raw.isEmpty()) emptyList() else raw.split(",")
     }
 
-    suspend fun addRecentApp(context: Context, packageName: String, maxLimit: Int = 10) {
+    suspend fun recentApps(context: Context): List<String> {
+        val node = getCurrentServerNodeSync()
+        return recentApps(context, node)
+    }
+
+    suspend fun addRecentApp(context: Context, node: ServerNode, packageName: String, maxLimit: Int = 10) {
+        val key = stringPreferencesKey("recent_apps_${node.uniqueKey()}")
         context.applicationContext.dataStore.edit { prefs ->
-            val current = prefs[recentAppsKey] ?: ""
+            val current = prefs[key] ?: ""
             val list = if (current.isEmpty()) mutableListOf() else current.split(",").toMutableList()
             list.remove(packageName)
             list.add(0, packageName)
             val saved = if (list.size > maxLimit) list.take(maxLimit) else list
-            prefs[recentAppsKey] = saved.joinToString(",")
+            prefs[key] = saved.joinToString(",")
         }
     }
 
-    fun recentAppsFlow(context: Context): Flow<List<String>> {
+    suspend fun addRecentApp(context: Context, packageName: String, maxLimit: Int = 10) {
+        val node = getCurrentServerNodeSync()
+        addRecentApp(context, node, packageName, maxLimit)
+    }
+
+    fun recentAppsFlow(context: Context, node: ServerNode): Flow<List<String>> {
+        val key = stringPreferencesKey("recent_apps_${node.uniqueKey()}")
         return context.applicationContext.dataStore.data.map { prefs ->
-            val raw = prefs[recentAppsKey] ?: ""
+            val raw = prefs[key] ?: ""
             if (raw.isEmpty()) emptyList() else raw.split(",")
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun recentAppsFlow(context: Context): Flow<List<String>> {
+        return _currentServerNodeCache.flatMapLatest { node ->
+            recentAppsFlow(context, node)
         }
     }
     fun getPrivilegeModeSync(): PrivilegeMode = _privilegeModeCache.value
@@ -347,5 +454,65 @@ object AppSettings {
 
     suspend fun setAutoStartServer(context: Context, enabled: Boolean) {
         context.applicationContext.dataStore.edit { it[autoStartServerKey] = enabled }
+    }
+
+    fun ultraLowLatencyFlow(context: Context): Flow<Boolean> {
+        return context.applicationContext.dataStore.data.map { prefs ->
+            prefs[ultraLowLatencyKey] ?: false
+        }
+    }
+
+    fun getUltraLowLatencySync(): Boolean = _ultraLowLatencyCache.value
+
+    suspend fun setUltraLowLatency(context: Context, enabled: Boolean) {
+        context.applicationContext.dataStore.edit { it[ultraLowLatencyKey] = enabled }
+    }
+
+    suspend fun getDisplaysForServer(context: Context, node: ServerNode): List<SavedDisplay> {
+        val key = stringPreferencesKey("displays_${node.uniqueKey()}")
+        val raw = context.applicationContext.dataStore.data.first()[key] ?: ""
+        if (raw.isEmpty()) return emptyList()
+        return try {
+            val array = org.json.JSONArray(raw)
+            val list = mutableListOf<SavedDisplay>()
+            for (i in 0 until array.length()) {
+                list.add(SavedDisplay.fromJsonObject(array.getJSONObject(i)))
+            }
+            list
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun saveDisplayForServer(context: Context, node: ServerNode, display: SavedDisplay) {
+        val key = stringPreferencesKey("displays_${node.uniqueKey()}")
+        val current = getDisplaysForServer(context, node).toMutableList()
+        current.removeAll { it.id == display.id }
+        current.add(display)
+        val array = org.json.JSONArray()
+        current.forEach { array.put(it.toJsonObject()) }
+        context.applicationContext.dataStore.edit { prefs ->
+            prefs[key] = array.toString()
+        }
+    }
+
+    suspend fun removeDisplayForServer(context: Context, node: ServerNode, displayId: Int) {
+        val key = stringPreferencesKey("displays_${node.uniqueKey()}")
+        val current = getDisplaysForServer(context, node).toMutableList()
+        current.removeAll { it.id == displayId }
+        val array = org.json.JSONArray()
+        current.forEach { array.put(it.toJsonObject()) }
+        context.applicationContext.dataStore.edit { prefs ->
+            prefs[key] = array.toString()
+        }
+    }
+
+    suspend fun setDisplaysForServer(context: Context, node: ServerNode, displays: List<SavedDisplay>) {
+        val key = stringPreferencesKey("displays_${node.uniqueKey()}")
+        val array = org.json.JSONArray()
+        displays.forEach { array.put(it.toJsonObject()) }
+        context.applicationContext.dataStore.edit { prefs ->
+            prefs[key] = array.toString()
+        }
     }
 }

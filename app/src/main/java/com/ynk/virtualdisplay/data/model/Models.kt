@@ -55,3 +55,39 @@ val ALL_DISPLAY_FLAGS = listOf(
     DisplayFlag("flag_own_focus", VIRTUAL_DISPLAY_FLAG_OWN_FOCUS, "Own Focus", "使此虚拟显示器能够拥有自己的焦点系统，与主屏可以同时处于 Active 状态，并接收独立的键盘或输入焦点", 34, true),
     DisplayFlag("flag_device_display_group", VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP, "Device Display Group", "指示此虚拟屏幕应被关联到特定的伴随设备组，用于区分普通的系统组和特定的硬件投屏组", 34, false)
 )
+
+data class SavedDisplay(
+    val id: Int,
+    val name: String,
+    val width: Int,
+    val height: Int,
+    val dpi: Int,
+    val mirrorDisplayId: Int = -1,
+    val isOwned: Boolean = false
+) {
+    fun toJsonObject(): org.json.JSONObject {
+        return org.json.JSONObject().apply {
+            put("id", id)
+            put("name", name)
+            put("width", width)
+            put("height", height)
+            put("dpi", dpi)
+            put("mirrorDisplayId", mirrorDisplayId)
+            put("isOwned", isOwned)
+        }
+    }
+
+    companion object {
+        fun fromJsonObject(json: org.json.JSONObject): SavedDisplay {
+            return SavedDisplay(
+                id = json.getInt("id"),
+                name = json.getString("name"),
+                width = json.getInt("width"),
+                height = json.getInt("height"),
+                dpi = json.getInt("dpi"),
+                mirrorDisplayId = json.optInt("mirrorDisplayId", -1),
+                isOwned = json.optBoolean("isOwned", false)
+            )
+        }
+    }
+}

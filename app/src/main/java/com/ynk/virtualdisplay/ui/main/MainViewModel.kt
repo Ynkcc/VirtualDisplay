@@ -107,6 +107,8 @@ class MainViewModel(
         viewModelScope.launch {
             AppSettings.currentServerNodeCache.collect { node ->
                 _uiState.update { it.copy(currentServerNode = node) }
+                reloadDefaultInputsFromSettings(force = true)
+                refreshDisplaysInternal()
             }
         }
     }
@@ -122,7 +124,7 @@ class MainViewModel(
                     reloadDefaultInputsFromSettings()
                 }
             }
-            is MainIntent.CreateDisplay -> createVirtualDisplay(intent.width, intent.height, intent.dpi)
+            is MainIntent.CreateDisplay -> createVirtualDisplay(intent.width, intent.height, intent.dpi, intent.mirrorDisplayId)
             is MainIntent.ReleaseDisplay -> releaseDisplay(intent.displayId)
             is MainIntent.LaunchApp -> launchSelectedApp(intent.packageName, intent.displayId)
             is MainIntent.RestartService -> forceRestartService()
@@ -243,56 +245,72 @@ class MainViewModel(
     private fun refreshDisplaysInternal() {
         interactor.refreshDisplays()
         val managedByService = interactor.managedDisplayIds.value
+        val currentNode = _uiState.value.currentServerNode
 
-        val displaysList = mutableListOf<DisplayInfoModel>()
-        val orphans = mutableListOf<Int>()
-
-        displayMetricsManager.getVirtualDisplays().forEach { display ->
-            val spec = displayMetricsManager.getVirtualDisplaySpec(display)
-            displaysList.add(
+        viewModelScope.launch {
+            val savedDisplays = AppSettings.getDisplaysForServer(appContext, currentNode)
+            val displaysList = savedDisplays.map { display ->
                 DisplayInfoModel(
-                    id = display.displayId,
+                    id = display.id,
                     name = display.name,
-                    width = spec.width,
-                    height = spec.height
+                    width = display.width,
+                    height = display.height,
+                    dpi = display.dpi,
+                    mirrorDisplayId = display.mirrorDisplayId
                 )
-            )
-            if (interactor.connectionStatus.value == ConnectionStatus.CONNECTED && display.displayId !in managedByService) {
-                orphans.add(display.displayId)
             }
-        }
 
-        _uiState.update { it.copy(
-            displays = displaysList,
-            orphanDisplayIds = orphans,
-            statusMessage = if (it.statusMessage.startsWith("Error:")) it.statusMessage else "Displays refreshed"
-        ) }
+            val orphans = mutableListOf<Int>()
+            displaysList.forEach { display ->
+                if (interactor.connectionStatus.value == ConnectionStatus.CONNECTED && display.id !in managedByService) {
+                    orphans.add(display.id)
+                }
+            }
+
+            _uiState.update { it.copy(
+                displays = displaysList,
+                orphanDisplayIds = orphans,
+                statusMessage = if (it.statusMessage.startsWith("Error:")) it.statusMessage else "Displays refreshed"
+            ) }
+        }
     }
 
     // === 输入框默认值 ===
 
-    private fun checkAndInitDeviceMetrics() {
+    private fun checkAndInitDeviceMetrics(force: Boolean = false) {
         val deviceSpec = displayMetricsManager.getDefaultDisplaySpec()
             ?: DisplayMetricsManager.DisplaySpec(1080, 1920, 420)
         viewModelScope.launch {
             val (defaultW, defaultH, defaultDpi) = AppSettings.getPrefDefaults(appContext)
             _uiState.update { state ->
                 state.copy(
-                    inputWidth = state.inputWidth.ifEmpty { defaultW.ifEmpty { deviceSpec.width.toString() } },
-                    inputHeight = state.inputHeight.ifEmpty { defaultH.ifEmpty { deviceSpec.height.toString() } },
-                    inputDpi = state.inputDpi.ifEmpty { defaultDpi.ifEmpty { deviceSpec.dpi.toString() } }
+                    inputWidth = if (force) {
+                        defaultW.ifEmpty { deviceSpec.width.toString() }
+                    } else {
+                        state.inputWidth.ifEmpty { defaultW.ifEmpty { deviceSpec.width.toString() } }
+                    },
+                    inputHeight = if (force) {
+                        defaultH.ifEmpty { deviceSpec.height.toString() }
+                    } else {
+                        state.inputHeight.ifEmpty { defaultH.ifEmpty { deviceSpec.height.toString() } }
+                    },
+                    inputDpi = if (force) {
+                        defaultDpi.ifEmpty { deviceSpec.dpi.toString() }
+                    } else {
+                        state.inputDpi.ifEmpty { defaultDpi.ifEmpty { deviceSpec.dpi.toString() } }
+                    }
                 )
             }
         }
     }
 
-    fun reloadDefaultInputsFromSettings() {
-        checkAndInitDeviceMetrics()
+    fun reloadDefaultInputsFromSettings(force: Boolean = false) {
+        checkAndInitDeviceMetrics(force)
     }
 
     // === 创建虚拟显示器 ===
 
-    private fun createVirtualDisplay(widthStr: String, heightStr: String, dpiStr: String) {
+    private fun createVirtualDisplay(widthStr: String, heightStr: String, dpiStr: String, mirrorDisplayId: Int = -1) {
         val w = widthStr.toIntOrNull() ?: 0
         val h = heightStr.toIntOrNull() ?: 0
         val d = dpiStr.toIntOrNull() ?: 0
@@ -303,12 +321,14 @@ class MainViewModel(
         }
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Creating display ${w}x${h}...") }
+            val statusMsg = if (mirrorDisplayId >= 0) "Mirroring display $mirrorDisplayId..." else "Creating display ${w}x${h}..."
+            _uiState.update { it.copy(isLoading = true, statusMessage = statusMsg) }
             interactor.createDisplay(
-                name = "Shizuku_VD_${System.currentTimeMillis()}",
+                name = if (mirrorDisplayId >= 0) "Mirror_VD_${mirrorDisplayId}" else "Shizuku_VD_${System.currentTimeMillis()}",
                 width = w,
                 height = h,
-                dpi = d
+                dpi = d,
+                mirrorDisplayId = mirrorDisplayId
             ).onSuccess { displayId ->
                 _uiState.update { it.copy(isLoading = false, statusMessage = "Created Display ID: $displayId") }
                 refreshDisplays()

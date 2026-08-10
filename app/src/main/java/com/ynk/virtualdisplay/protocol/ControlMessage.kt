@@ -12,7 +12,8 @@ sealed class ControlMessage {
         val width: Int,
         val height: Int,
         val dpi: Int,
-        val flags: Int
+        val flags: Int,
+        val displayId: Int = -1
     ) : ControlMessage() {
         override val type: Int = TYPE_CREATE_VIRTUAL_DISPLAY
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
@@ -21,6 +22,7 @@ sealed class ControlMessage {
             writeInt(height)
             writeInt(dpi)
             writeInt(flags)
+            writeInt(displayId)
         }
     }
 

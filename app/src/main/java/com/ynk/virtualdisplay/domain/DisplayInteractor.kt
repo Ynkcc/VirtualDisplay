@@ -94,7 +94,8 @@ class DisplayInteractor(
         width: Int,
         height: Int,
         dpi: Int,
-        flags: Int = 0
+        flags: Int = 0,
+        mirrorDisplayId: Int = -1
     ): Result<Int> {
         // 业务规则校验（尺寸/比例）失败必须转为 Result.failure，不能抛出：
         // 调用方 MainViewModel.createVirtualDisplay 在 viewModelScope.launch 中
@@ -107,7 +108,7 @@ class DisplayInteractor(
             return Result.failure(e)
         }
 
-        return repository.createDisplay(name, width, height, dpi, finalFlags)
+        return repository.createDisplay(name, width, height, dpi, finalFlags, mirrorDisplayId)
     }
 
     /**

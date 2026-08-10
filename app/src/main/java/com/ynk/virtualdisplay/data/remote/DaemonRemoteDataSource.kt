@@ -19,8 +19,8 @@ class DaemonRemoteDataSource(
     // === 显示器管理 ===
 
     suspend fun createDisplay(
-        name: String, w: Int, h: Int, dpi: Int, flags: Int
-    ): Result<Int> = controlApi.createDisplay(name, w, h, dpi, flags)
+        name: String, w: Int, h: Int, dpi: Int, flags: Int, mirrorDisplayId: Int = -1
+    ): Result<Int> = controlApi.createDisplay(name, w, h, dpi, flags, mirrorDisplayId)
 
     suspend fun releaseDisplay(displayId: Int): Result<Unit> =
         controlApi.releaseDisplay(displayId)
@@ -30,6 +30,9 @@ class DaemonRemoteDataSource(
 
     suspend fun getActiveDisplayIds(): Result<IntArray> =
         controlApi.getActiveDisplayIds()
+
+    suspend fun getActiveDisplayInfos(): Result<List<com.ynk.virtualdisplay.protocol.DeviceMessage.DisplayInfoEntry>> =
+        controlApi.getActiveDisplayInfos()
 
     // === 应用启动 ===
 

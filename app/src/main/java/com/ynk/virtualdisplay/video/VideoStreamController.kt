@@ -97,6 +97,7 @@ class VideoStreamController(
             )
 
             d.onVideoConfig = onVideoConfig
+            d.ultraLowLatency = com.ynk.virtualdisplay.data.AppSettings.getUltraLowLatencySync()
             surface?.let { d.setDisplaySurface(it) }
             d.start()
             decoder = d

@@ -49,9 +49,11 @@ class PerformanceTracker {
         val nowNs = System.nanoTime()
         val renderLatencyMs = (nowNs - dequeuedAtNs) / 1_000_000.0
         renderLatencyEwmaMs = updateEwma(renderLatencyEwmaMs, renderLatencyMs)
-        val intervalMs = (nowNs - lastPresentNs) / 1_000_000.0
-        presentIntervalEwmaMs = updateEwma(presentIntervalEwmaMs, intervalMs)
-        pacingVarianceEwmaMs = updateEwma(pacingVarianceEwmaMs, Math.abs(intervalMs - presentIntervalEwmaMs))
+        if (lastPresentNs != 0L) {
+            val intervalMs = (nowNs - lastPresentNs) / 1_000_000.0
+            presentIntervalEwmaMs = updateEwma(presentIntervalEwmaMs, intervalMs)
+            pacingVarianceEwmaMs = updateEwma(pacingVarianceEwmaMs, Math.abs(intervalMs - presentIntervalEwmaMs))
+        }
         lastPresentNs = nowNs
 
         frameCount.incrementAndGet()

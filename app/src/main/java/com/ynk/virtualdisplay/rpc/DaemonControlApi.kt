@@ -12,7 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 interface DaemonControlApi {
-    suspend fun createDisplay(name: String, w: Int, h: Int, dpi: Int, flags: Int): Result<Int>
+    suspend fun createDisplay(name: String, w: Int, h: Int, dpi: Int, flags: Int, mirrorDisplayId: Int = -1): Result<Int>
     suspend fun releaseDisplay(displayId: Int): Result<Unit>
     suspend fun resizeDisplay(displayId: Int, w: Int, h: Int, dpi: Int): Result<Unit>
     suspend fun startActivity(packageName: String, displayId: Int): Result<Int>
@@ -48,8 +48,8 @@ class DaemonControlApiImpl(
     private val transport: com.ynk.virtualdisplay.net.DaemonTransport
 ) : DaemonControlApi {
 
-    override suspend fun createDisplay(name: String, w: Int, h: Int, dpi: Int, flags: Int): Result<Int> {
-        val msg = ControlMessage.CreateVirtualDisplay(name, w, h, dpi, flags)
+    override suspend fun createDisplay(name: String, w: Int, h: Int, dpi: Int, flags: Int, mirrorDisplayId: Int): Result<Int> {
+        val msg = ControlMessage.CreateVirtualDisplay(name, w, h, dpi, flags, mirrorDisplayId)
         val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
         return if (resp is DeviceMessage.GenericResponse) {
             if (resp.statusCode == 0) {

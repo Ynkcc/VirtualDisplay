@@ -307,6 +307,7 @@ class H264StreamDecoder(
                         if (running.get()) Log.w(TAG, "dequeueOutputBuffer failed", e)
                         return@synchronized
                     }
+                    val dequeuedAtNs = System.nanoTime()
                     when {
                         outputIndex >= 0 -> {
                             val size = bufferInfo.size
@@ -328,7 +329,7 @@ class H264StreamDecoder(
                                 framesRendered++
                                 if (ultraLowLatency) {
                                     runCatching { activeCodec.releaseOutputBuffer(outputIndex, System.nanoTime()) }
-                                    tracker.recordRender(System.nanoTime())
+                                    tracker.recordRender(dequeuedAtNs)
                                 } else {
                                     renderScheduler?.offer(
                                         DecodedOutputFrame(
@@ -336,7 +337,7 @@ class H264StreamDecoder(
                                             presentationTimeUs = bufferInfo.presentationTimeUs,
                                             flags = bufferInfo.flags,
                                             size = bufferInfo.size,
-                                            dequeuedAtNs = System.nanoTime()
+                                            dequeuedAtNs = dequeuedAtNs
                                         )
                                     )
                                 }

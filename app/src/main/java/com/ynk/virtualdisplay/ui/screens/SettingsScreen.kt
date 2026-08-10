@@ -46,6 +46,7 @@ fun SettingsScreen(
     val serverPassword by AppSettings.serverPasswordFlow(context).collectAsState(initial = "")
     val showPerformanceStats by AppSettings.showPerformanceStatsFlow(context).collectAsState(initial = true)
     val captureBack by AppSettings.captureBackFlow(context).collectAsState(initial = false)
+    val ultraLowLatency by AppSettings.ultraLowLatencyFlow(context).collectAsState(initial = false)
 
     val flagStates = remember {
         mutableStateMapOf<String, Boolean>()
@@ -231,6 +232,19 @@ fun SettingsScreen(
                             onCheckedChange = { isChecked ->
                                 scope.launch {
                                     AppSettings.setShowPerformanceStats(context, isChecked)
+                                }
+                            }
+                        )
+
+                        HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+
+                        SettingSwitchRow(
+                            title = "超低延迟模式",
+                            description = "开启后视频流解码完成后立即渲染，降低渲染排队延迟（同机投屏操控建议开启）",
+                            checked = ultraLowLatency,
+                            onCheckedChange = { isChecked ->
+                                scope.launch {
+                                    AppSettings.setUltraLowLatency(context, isChecked)
                                 }
                             }
                         )

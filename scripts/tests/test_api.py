@@ -138,4 +138,25 @@ class TestDaemonApi:
             f"orphan release 的 msg 应为 RELEASED，实际: {resp_orphan.get('msg')}"
         )
 
+    def test_07_create_mirror_display(self, shared_client: ControlClient):
+        """测试 7: 创建镜像显示器 (镜像 display 0) 并验证。"""
+        resp = shared_client.create_virtual_display(
+            name="TestMirror_VD_0", width=720, height=1280, dpi=240,
+            flags=0x0001 | 0x0100, display_id=0
+        )
+        assert resp["status_code"] == 0, f"创建镜像屏幕失败: {resp.get('msg')}"
+        mirror_did = resp["display_id"]
+        assert mirror_did > 0, "镜像显示器 display_id 应该大于 0"
+
+        # 查询详情
+        infos = shared_client.get_active_display_infos()
+        matching = [info for info in infos["displays"] if info["display_id"] == mirror_did]
+        assert len(matching) == 1, "应该能查询到刚才创建的镜像显示器详情"
+        assert matching[0]["mirror_display_id"] == 0, "镜像源 ID 应为 0"
+        assert matching[0]["is_owned"] is True, "由服务端创建的镜像屏幕其 is_owned 应为 True"
+
+        # 释放
+        resp_release = shared_client.release_virtual_display(mirror_did)
+        assert resp_release["status_code"] == 0, f"释放镜像显示器失败: {resp_release}"
+
 

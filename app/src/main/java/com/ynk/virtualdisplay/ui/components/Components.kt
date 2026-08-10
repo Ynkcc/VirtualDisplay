@@ -28,7 +28,8 @@ fun DisplayItem(
     isOrphan: Boolean = false,
     onPlay: () -> Unit,
     onDelete: () -> Unit,
-    onLaunchApp: () -> Unit
+    onLaunchApp: () -> Unit,
+    onMirror: (() -> Unit)? = null
 ) {
     val borderColor = if (isOrphan) {
         Color(0xFFE57373).copy(alpha = 0.4f)
@@ -71,7 +72,11 @@ fun DisplayItem(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "显示器 #${displayInfo.id}",
+                        text = if (displayInfo.mirrorDisplayId >= 0) {
+                            "#${displayInfo.mirrorDisplayId} -> #${displayInfo.id}"
+                        } else {
+                            "#${displayInfo.id}"
+                        },
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
@@ -108,7 +113,7 @@ fun DisplayItem(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = if (isOrphan) "未接管" else "点击操控查看",
+                        text = if (isOrphan) "未接管" else "尚未实现预览",
                         color = Color.Gray,
                         fontSize = 11.sp
                     )
@@ -142,53 +147,69 @@ fun DisplayItem(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 删除按钮
-                IconButton(
-                    onClick = onDelete,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .background(Color(0xFFEF5350).copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
-                ) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Delete",
-                        tint = Color(0xFFEF5350),
-                        modifier = Modifier.size(16.dp)
-                    )
+                // 删除按钮 (物理主屏幕 ID = 0 不允许删除)
+                if (displayInfo.id != 0) {
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .background(Color(0xFFEF5350).copy(alpha = 0.1f), RoundedCornerShape(8.dp)),
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = Color(0xFFEF5350),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
                 
                 Spacer(modifier = Modifier.weight(1f))
 
-                // 启动应用按钮
-                OutlinedButton(
-                    onClick = onLaunchApp,
-                    enabled = !isOrphan,
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.primary
-                    )
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("启动", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
+                if (isOrphan) {
+                    if (onMirror != null) {
+                        Button(
+                            onClick = onMirror,
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            modifier = Modifier.height(32.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary
+                            )
+                        ) {
+                            Text("镜像", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                } else {
+                    // 启动应用按钮
+                    OutlinedButton(
+                        onClick = onLaunchApp,
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(32.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("启动", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
  
-                // 进入全屏按钮
-                Button(
-                    onClick = onPlay,
-                    enabled = !isOrphan,
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    modifier = Modifier.height(32.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary
-                    )
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("操控", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    // 进入全屏按钮
+                    Button(
+                        onClick = onPlay,
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(32.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("操控", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

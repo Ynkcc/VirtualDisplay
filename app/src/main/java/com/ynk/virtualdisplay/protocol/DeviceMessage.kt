@@ -31,7 +31,9 @@ sealed class DeviceMessage {
         val width: Int,
         val height: Int,
         val dpi: Int,
-        val rotation: Int
+        val rotation: Int,
+        val mirrorDisplayId: Int = -1,
+        val isOwned: Boolean = false
     )
 
     /** Enriched variant of [ActiveDisplaysResponse] (TYPE 102). */
