@@ -65,10 +65,6 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme {
                 MainScreen(
                     shizukuManager = shizukuManager,
-                    onShizukuReady = {
-                        // Shizuku 就绪时加载 appModule（两阶段启动的第二阶段）
-                        (application as MyApplication).bootstrapCore()
-                    },
                     onRequestPermission = {
                         try {
                             Shizuku.requestPermission(ShizukuManager.REQUEST_CODE)
@@ -86,95 +82,51 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // ViewModel.onCleared 会处理 unbindService
     }
 }
 
 @Composable
 private fun MainScreen(
     shizukuManager: ShizukuManager,
-    onShizukuReady: () -> Unit,
     onRequestPermission: () -> Unit,
     onRetryCheck: () -> Unit
 ) {
-    val shizukuState by shizukuManager.shizukuState.collectAsState()
+    val viewModel: MainViewModel = koinViewModel()
+    val uiState by viewModel.uiState.collectAsState()
 
-    // 当 Shizuku 变为 Ready 时，触发 bootstrapCore 加载 appModule
-    var bootstrapTriggered by remember { mutableStateOf(false) }
-    LaunchedEffect(shizukuState) {
-        if (shizukuState is ShizukuState.Ready && !bootstrapTriggered) {
-            bootstrapTriggered = true
-            onShizukuReady()
-        }
+    // 首次进入时尝试连接
+    LaunchedEffect(Unit) {
+        viewModel.handleIntent(MainIntent.CheckShizuku)
     }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            if (shizukuState is ShizukuState.Ready && bootstrapTriggered) {
-                // MainViewModel 只有在 bootstrapTriggered=true 后才能安全获取
-                val viewModel: MainViewModel = koinViewModel()
-                val uiState by viewModel.uiState.collectAsState()
-                if (uiState.shizukuState is ShizukuState.Ready) {
-                    NavigationBar {
-                        NavigationBarItem(
-                            selected = uiState.currentTab == ScreenTab.CONSOLE,
-                            onClick = { viewModel.handleIntent(MainIntent.SwitchTab(ScreenTab.CONSOLE)) },
-                            icon = { Icon(Icons.Default.Home, contentDescription = "控制台") },
-                            label = { Text("控制台") }
-                        )
-                        NavigationBarItem(
-                            selected = uiState.currentTab == ScreenTab.SETTINGS,
-                            onClick = { viewModel.handleIntent(MainIntent.SwitchTab(ScreenTab.SETTINGS)) },
-                            icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
-                            label = { Text("设置") }
-                        )
-                    }
-                }
+            NavigationBar {
+                NavigationBarItem(
+                    selected = uiState.currentTab == ScreenTab.CONSOLE,
+                    onClick = { viewModel.handleIntent(MainIntent.SwitchTab(ScreenTab.CONSOLE)) },
+                    icon = { Icon(Icons.Default.Home, contentDescription = "控制台") },
+                    label = { Text("控制台") }
+                )
+                NavigationBarItem(
+                    selected = uiState.currentTab == ScreenTab.SETTINGS,
+                    onClick = { viewModel.handleIntent(MainIntent.SwitchTab(ScreenTab.SETTINGS)) },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
+                    label = { Text("设置") }
+                )
             }
         }
     ) { innerPadding ->
         Box(modifier = Modifier.padding(innerPadding)) {
-            when (shizukuState) {
-                is ShizukuState.Checking -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                }
-                is ShizukuState.Ready -> {
-                    if (bootstrapTriggered) {
-                        // appModule 已加载，可以安全获取 MainViewModel
-                        val viewModel: MainViewModel = koinViewModel()
-                        val uiState by viewModel.uiState.collectAsState()
+            when (uiState.currentTab) {
+                ScreenTab.CONSOLE -> VirtualDisplayScreen(viewModel = viewModel)
+                ScreenTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
+            }
 
-                        // 首次进入时检查 Shizuku 并绑定服务
-                        LaunchedEffect(Unit) {
-                            viewModel.handleIntent(MainIntent.CheckShizuku)
-                        }
-
-                        when (uiState.currentTab) {
-                            ScreenTab.CONSOLE -> VirtualDisplayScreen(viewModel = viewModel)
-                            ScreenTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
-                        }
-
-                        if (uiState.isLoading) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator()
-                            }
-                        }
-                    } else {
-                        // bootstrapCore 正在加载中
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
-                        }
-                    }
-                }
-                else -> {
-                    ShizukuPermissionScreen(
-                        state = shizukuState,
-                        onRetry = onRetryCheck,
-                        onRequestPermission = onRequestPermission
-                    )
+            if (uiState.isLoading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
                 }
             }
         }

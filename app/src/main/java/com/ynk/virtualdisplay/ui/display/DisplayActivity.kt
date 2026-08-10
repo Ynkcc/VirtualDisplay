@@ -271,10 +271,6 @@ class DisplayActivity : ComponentActivity() {
         controlPanel = DisplayControlPanel(
             context = this,
             onBackClick = { inputController.injectKey(KeyEvent.KEYCODE_BACK) },
-            onHomeClick = {
-                val id = remoteDisplayId ?: return@DisplayControlPanel
-                lifecycleScope.launch { repository.launchHome(id) }
-            },
             onAppLauncherClick = { showAppSelectionDialog() },
             onKeyboardClick = { toggleKeyboard() },
             onCloseClick = { finish() },

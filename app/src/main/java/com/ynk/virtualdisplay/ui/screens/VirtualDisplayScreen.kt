@@ -19,6 +19,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -121,17 +122,21 @@ fun VirtualDisplayScreen(
                 )
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(
-                        onClick = { viewModel.handleIntent(MainIntent.RestartService) },
-                        enabled = !uiState.isRestartCooldown && !uiState.isLoading,
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        )
-                    ) {
-                        Text(
-                            text = if (uiState.isRestartCooldown) "冷却中..." else "重启服务",
-                            fontWeight = FontWeight.Bold
-                        )
+                    val isLocal = uiState.currentServerNode.host == "127.0.0.1" || uiState.currentServerNode.host == "localhost"
+                    val isLocalPrivileged = isLocal && uiState.privilegeMode != com.ynk.virtualdisplay.data.PrivilegeMode.NONE
+                    if (!isLocalPrivileged) {
+                        TextButton(
+                            onClick = { viewModel.handleIntent(MainIntent.BindService) },
+                            enabled = !uiState.isLoading,
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Text(
+                                text = "重连服务",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                     IconButton(
                         onClick = { viewModel.handleIntent(MainIntent.RefreshDisplays) },
@@ -164,29 +169,155 @@ fun VirtualDisplayScreen(
                 val (statusText, statusColor) = when (connectionStatus) {
                     ConnectionStatus.CONNECTED -> {
                         val suffix = if (uiState.daemonPid > 0) " (PID: ${uiState.daemonPid})" else ""
-                        "特权服务: 已连接$suffix" to Color(0xFF26A69A)
+                        "已连接$suffix" to Color(0xFF26A69A)
                     }
-                    ConnectionStatus.BINDING -> "特权服务: 正在绑定..." to Color(0xFFFFB74D)
-                    ConnectionStatus.RECONNECTING -> "特权服务: 正在重连..." to Color(0xFFFFB74D)
-                    ConnectionStatus.DISCONNECTED -> "特权服务: 连接断开" to Color(0xFFEF5350)
-                    ConnectionStatus.ERROR -> "特权服务: 错误" to Color(0xFFEF5350)
-                    ConnectionStatus.IDLE -> "特权服务: 空闲" to Color(0xFF78909C)
+                    ConnectionStatus.BINDING -> "正在绑定..." to Color(0xFFFFB74D)
+                    ConnectionStatus.RECONNECTING -> "正在重连..." to Color(0xFFFFB74D)
+                    ConnectionStatus.DISCONNECTED -> "连接断开" to Color(0xFFEF5350)
+                    ConnectionStatus.ERROR -> "错误" to Color(0xFFEF5350)
+                    ConnectionStatus.IDLE -> "空闲" to Color(0xFF78909C)
                 }
 
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .background(statusColor, RoundedCornerShape(4.dp))
-                )
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
-                Text(
-                    text = statusText,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = statusColor
-                )
+                var dropdownExpanded by remember { mutableStateOf(false) }
+                var showAddDialog by remember { mutableStateOf(false) }
+
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { dropdownExpanded = true }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(statusColor, RoundedCornerShape(4.dp))
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "${uiState.currentServerNode.name}: $statusText ▼",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = statusColor
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = dropdownExpanded,
+                        onDismissRequest = { dropdownExpanded = false }
+                    ) {
+                        uiState.serverNodes.forEach { node ->
+                            val isLocalNode = node.host == "127.0.0.1" || node.host == "localhost" || node.name == "本机"
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("${node.name} (${node.host}:${node.port})", modifier = Modifier.weight(1f))
+                                        if (node.host == uiState.currentServerNode.host && node.port == uiState.currentServerNode.port) {
+                                            Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        }
+                                        if (!isLocalNode) {
+                                            IconButton(
+                                                onClick = {
+                                                    dropdownExpanded = false
+                                                    viewModel.handleIntent(MainIntent.RemoveServerNode(node))
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = "删除设备",
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    dropdownExpanded = false
+                                    viewModel.handleIntent(MainIntent.SelectServerNode(node))
+                                }
+                            )
+                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("+ 添加外部设备...") },
+                            onClick = {
+                                dropdownExpanded = false
+                                showAddDialog = true
+                            }
+                        )
+                    }
+                }
+
+                if (showAddDialog) {
+                    var addName by remember { mutableStateOf("") }
+                    var addHost by remember { mutableStateOf("") }
+                    var addPort by remember { mutableStateOf("27183") }
+                    var addPassword by remember { mutableStateOf("") }
+
+                    AlertDialog(
+                        onDismissRequest = { showAddDialog = false },
+                        title = { Text("添加外部设备") },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = addName,
+                                    onValueChange = { addName = it },
+                                    label = { Text("设备名称") },
+                                    placeholder = { Text("例: 电视") },
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = addHost,
+                                    onValueChange = { addHost = it },
+                                    label = { Text("设备 IP") },
+                                    placeholder = { Text("192.168.1.100") },
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = addPort,
+                                    onValueChange = { addPort = it.filter { c -> c.isDigit() } },
+                                    label = { Text("设备端口") },
+                                    placeholder = { Text("27183") },
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = addPassword,
+                                    onValueChange = { addPassword = it },
+                                    label = { Text("连接密码 (可选)") },
+                                    singleLine = true
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    val portNum = addPort.toIntOrNull() ?: 27183
+                                    if (addName.isNotEmpty() && addHost.isNotEmpty()) {
+                                        val newNode = com.ynk.virtualdisplay.data.ServerNode(addName, addHost, portNum, addPassword)
+                                        viewModel.handleIntent(MainIntent.AddServerNode(newNode))
+                                        viewModel.handleIntent(MainIntent.SelectServerNode(newNode))
+                                        showAddDialog = false
+                                    }
+                                }
+                            ) {
+                                Text("添加并切换")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showAddDialog = false }) {
+                                Text("取消")
+                            }
+                        }
+                    )
+                }
 
                 Spacer(modifier = Modifier.weight(1f))
 

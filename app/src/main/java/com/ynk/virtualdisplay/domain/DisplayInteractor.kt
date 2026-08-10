@@ -8,6 +8,7 @@ import android.util.Log
 import android.view.InputEvent
 import android.view.Surface
 import com.ynk.virtualdisplay.data.AppSettings
+import com.ynk.virtualdisplay.data.PrivilegeMode
 import com.ynk.virtualdisplay.data.model.ALL_DISPLAY_FLAGS
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
@@ -51,7 +52,8 @@ class DisplayInteractor(
      * 内部会校验 Shizuku 可用性后再调用 Repository。
      */
     fun bindService() {
-        if (!shizukuManager.isAvailable()) {
+        val mode = AppSettings.getPrivilegeModeSync()
+        if (mode == PrivilegeMode.SHIZUKU && !shizukuManager.isAvailable()) {
             Log.w(TAG, "Shizuku not available, cannot bind service")
             return
         }
@@ -72,6 +74,14 @@ class DisplayInteractor(
         repository.unbindService()
         delay(500)
         repository.bindService()
+    }
+
+    suspend fun startDaemon(): Result<Unit> {
+        return repository.startDaemon()
+    }
+
+    suspend fun stopDaemon(): Result<Unit> {
+        return repository.stopDaemon()
     }
 
     // === 显示器操作 ===

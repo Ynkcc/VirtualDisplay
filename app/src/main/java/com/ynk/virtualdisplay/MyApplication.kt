@@ -43,38 +43,27 @@ class MyApplication : Application() {
         private set
 
     /**
-     * 第一阶段：冷启动，加载 coreModule。
-     * 仅初始化 Shizuku 状态检测、权限检查和显示信息查询组件。
+     * 冷启动，加载全部模块。
      */
     override fun onCreate() {
         super.onCreate()
         ExceptionUtils.setupGlobalCrashHandler()
-        Log.i(TAG, "冷启动：startKoin 加载 coreModule（权限前置依赖）")
+        Log.i(TAG, "冷启动：初始化 AppSettings 并加载所有模块")
+
+        AppSettings.init(this)
 
         startKoin {
             androidContext(this@MyApplication)
-            modules(coreModule)
+            modules(coreModule, appModule)
         }
+        isCoreBootstrapped = true
     }
 
     /**
-     * 第二阶段：Shizuku 权限验证通过后调用。
-     * 初始化 AppSettings（DataStore）并增量加载 appModule。
-     * 通过 [isCoreBootstrapped] 做幂等保护，重复调用安全无副作用。
+     * 兼容性保留，已在冷启动中完成。
      */
     @Synchronized
     fun bootstrapCore() {
-        if (isCoreBootstrapped) {
-            Log.i(TAG, "bootstrapCore 已完成，跳过重复初始化")
-            return
-        }
-
-        Log.i(TAG, "开始 bootstrapCore：初始化 AppSettings + 加载 appModule")
-        AppSettings.init(this)
-
-        loadKoinModules(appModule)
-
-        isCoreBootstrapped = true
-        Log.i(TAG, "bootstrapCore 完成，appModule 已加载")
+        Log.i(TAG, "bootstrapCore 调用已在冷启动完成，跳过")
     }
 }

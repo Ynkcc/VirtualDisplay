@@ -5,6 +5,8 @@ import android.hardware.display.DisplayManager
 import android.util.Log
 import android.view.InputEvent
 import android.view.Surface
+import com.ynk.virtualdisplay.data.AppSettings
+import com.ynk.virtualdisplay.data.PrivilegeMode
 import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
 import com.ynk.virtualdisplay.data.process.DaemonProcessDataSource
 import com.ynk.virtualdisplay.data.remote.DaemonRemoteDataSource
@@ -114,8 +116,20 @@ class DaemonDisplayRepository(
             val existing = reconnectJob
             if (existing != null && existing.isActive) return
             reconnectJob = scope.launch(Dispatchers.IO) {
-                val host = settingsDataSource.getServerHost()
-                val port = settingsDataSource.getServerPort()
+                val currentNode = AppSettings.getCurrentServerNodeSync()
+                val (host, port, password) = if (currentNode.name == "本机") {
+                    Triple(
+                        settingsDataSource.getServerHost(),
+                        settingsDataSource.getServerPort(),
+                        settingsDataSource.getServerPassword()
+                    )
+                } else {
+                    Triple(
+                        currentNode.host,
+                        currentNode.port,
+                        currentNode.password
+                    )
+                }
 
                 var attempt = 0
                 val baseDelayMs = 200L
@@ -132,33 +146,44 @@ class DaemonDisplayRepository(
                     // Hence we also probe the daemon TCP port with a short-lived
                     // socket; if port probe fails, treat the daemon as dead and
                     // restart it regardless of the cached PID.
-                    val cachedPid = processDataSource.getDaemonPid()
-                    val daemonListening = try {
-                        java.net.Socket().use { s ->
-                            s.connect(java.net.InetSocketAddress(host, port), 300)
-                            true
-                        }
-                    } catch (_: Exception) {
-                        false
-                    }
+                    val isLocal = currentNode.name == "本机" || 
+                                  currentNode.host == "127.0.0.1" || 
+                                  currentNode.host == "localhost" || 
+                                  currentNode.host == "0.0.0.0"
+                    val privilegeMode = AppSettings.getPrivilegeModeSync()
 
-                    val password = settingsDataSource.getServerPassword()
-                    if (cachedPid <= 0 || !daemonListening) {
-                        Log.i(TAG, "Auto-reconnect: daemon not alive (pid=$cachedPid, listening=$daemonListening), restarting daemon...")
-                        val started = processDataSource.startDaemon(port, host, password)
-                        if (!started) {
-                            Log.w(TAG, "Auto-reconnect: restartDaemon failed, retrying in ${delayMs}ms")
-                            kotlinx.coroutines.delay(delayMs)
-                            continue
+                    if (isLocal && privilegeMode != PrivilegeMode.NONE) {
+                        val cachedPid = processDataSource.getDaemonPid()
+                        val connectHost = if (host == "0.0.0.0") "127.0.0.1" else host
+                        val daemonListening = try {
+                            java.net.Socket().use { s ->
+                                s.connect(java.net.InetSocketAddress(connectHost, port), 300)
+                                true
+                            }
+                        } catch (_: Exception) {
+                            false
                         }
-                        _daemonPid.value = processDataSource.getDaemonPid()
+
+                        if (cachedPid <= 0 || !daemonListening) {
+                            Log.i(TAG, "Auto-reconnect: daemon not alive (pid=$cachedPid, listening=$daemonListening), restarting daemon...")
+                            val started = processDataSource.startDaemon(port, host, password)
+                            if (!started) {
+                                Log.w(TAG, "Auto-reconnect: restartDaemon failed, retrying in ${delayMs}ms")
+                                kotlinx.coroutines.delay(delayMs)
+                                continue
+                            }
+                            _daemonPid.value = processDataSource.getDaemonPid()
+                        }
+                    } else {
+                        _daemonPid.value = -1
                     }
 
                     Log.i(TAG, "Auto-reconnect: re-establishing transport negotiation (attempt $attempt)...")
+                    val connectHost = if (host == "0.0.0.0") "127.0.0.1" else host
                     val connected = try {
                         // Post-b7aef962 CONFIGURE_SESSION / roles declaration / token auth
                         // handshake is handled inside transport.connect(...) as defaults.
-                        transport.connect(host, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
+                        transport.connect(connectHost, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
                     } catch (t: Throwable) {
                         Log.w(TAG, "Auto-reconnect: transport.connect threw", t)
                         false
@@ -213,35 +238,65 @@ class DaemonDisplayRepository(
             try {
                 _connectionStatus.value = ConnectionStatus.BINDING
 
-                // 读取连接配置 → Local DataSource
-                val port = settingsDataSource.getServerPort()
-                val host = settingsDataSource.getServerHost()
-                val password = settingsDataSource.getServerPassword()
-
-                if (!shizukuManager.isAvailable()) {
-                    _connectionError.value = "Shizuku is not available"
-                    _connectionStatus.value = ConnectionStatus.ERROR
-                    return@launch
+                val currentNode = AppSettings.getCurrentServerNodeSync()
+                val (host, port, password) = if (currentNode.name == "本机") {
+                    Triple(
+                        settingsDataSource.getServerHost(),
+                        settingsDataSource.getServerPort(),
+                        settingsDataSource.getServerPassword()
+                    )
+                } else {
+                    Triple(
+                        currentNode.host,
+                        currentNode.port,
+                        currentNode.password
+                    )
                 }
 
-                // 启动守护进程 → Process DataSource
-                val started = withContext(Dispatchers.IO) {
-                    processDataSource.startDaemon(port, host, password)
-                }
-                if (!started) {
-                    _connectionError.value = "Failed to start daemon process"
-                    _connectionStatus.value = ConnectionStatus.ERROR
-                    return@launch
-                }
+                val isLocal = currentNode.name == "本机" || 
+                              currentNode.host == "127.0.0.1" || 
+                              currentNode.host == "localhost" || 
+                              currentNode.host == "0.0.0.0"
+                val privilegeMode = AppSettings.getPrivilegeModeSync()
 
-                _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
+                if (isLocal && privilegeMode != PrivilegeMode.NONE) {
+                    if (privilegeMode == PrivilegeMode.SHIZUKU && !shizukuManager.isAvailable()) {
+                        _connectionError.value = "Shizuku is not available"
+                        _connectionStatus.value = ConnectionStatus.ERROR
+                        return@launch
+                    }
+
+                    // 检查自动启动选项
+                    val autoStart = AppSettings.getAutoStartServerSync()
+                    val isRunning = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() > 0 }
+                    if (!autoStart && !isRunning) {
+                        Log.i(TAG, "autoStart is false and daemon not running, skipping startDaemon and connection")
+                        _connectionStatus.value = ConnectionStatus.DISCONNECTED
+                        return@launch
+                    }
+
+                    // 启动守护进程 → Process DataSource
+                    val started = withContext(Dispatchers.IO) {
+                        processDataSource.startDaemon(port, host, password)
+                    }
+                    if (!started) {
+                        _connectionError.value = "Failed to start daemon process"
+                        _connectionStatus.value = ConnectionStatus.ERROR
+                        return@launch
+                    }
+
+                    _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
+                } else {
+                    _daemonPid.value = -1
+                }
 
                 // Post-b7aef962: transport.connect performs the full 2-stage handshake
                 // (ROLE_NEGOTIATION → sessionId+deviceName → CONFIGURE_SESSION with
                 // declared roles) as well as optional secret_token auth. Defaults
                 // (secretToken=null, rolesMask=0 = "declare-on-bind" per-socket roles)
                 // match the server's default configuration.
-                val connected = transport.connect(host, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
+                val connectHost = if (host == "0.0.0.0") "127.0.0.1" else host
+                val connected = transport.connect(connectHost, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
                 if (connected) {
                     rpc.startMessageLoop(scope)
                     _connectionStatus.value = ConnectionStatus.CONNECTED
@@ -300,7 +355,16 @@ class DaemonDisplayRepository(
 
     private fun refreshManagedDisplays() {
         scope.launch {
-            _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
+            val currentNode = AppSettings.getCurrentServerNodeSync()
+            val isLocal = currentNode.name == "本机" || 
+                          currentNode.host == "127.0.0.1" || 
+                          currentNode.host == "localhost" || 
+                          currentNode.host == "0.0.0.0"
+            if (isLocal) {
+                _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
+            } else {
+                _daemonPid.value = -1
+            }
             // 获取显示器列表 → Remote DataSource
             val result = remoteDataSource.getActiveDisplayIds()
             result.onSuccess { ids ->
@@ -452,6 +516,58 @@ class DaemonDisplayRepository(
             }
         }
         scope.cancel()
+    }
+
+    override suspend fun startDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val currentNode = AppSettings.getCurrentServerNodeSync()
+            val (host, port, password) = if (currentNode.name == "本机") {
+                Triple(
+                    settingsDataSource.getServerHost(),
+                    settingsDataSource.getServerPort(),
+                    settingsDataSource.getServerPassword()
+                )
+            } else {
+                Triple(
+                    currentNode.host,
+                    currentNode.port,
+                    currentNode.password
+                )
+            }
+            val isLocal = currentNode.name == "本机" || 
+                          currentNode.host == "127.0.0.1" || 
+                          currentNode.host == "localhost" || 
+                          currentNode.host == "0.0.0.0"
+            val privilegeMode = AppSettings.getPrivilegeModeSync()
+
+            if (isLocal && privilegeMode != PrivilegeMode.NONE) {
+                if (privilegeMode == PrivilegeMode.SHIZUKU && !shizukuManager.isAvailable()) {
+                    throw Exception("Shizuku is not available")
+                }
+                val started = processDataSource.startDaemon(port, host, password)
+                if (!started) {
+                    throw Exception("Failed to start daemon process")
+                }
+                _daemonPid.value = processDataSource.getDaemonPid()
+            }
+            withContext(Dispatchers.Main) {
+                if (isBound) {
+                    unbindService()
+                    kotlinx.coroutines.delay(300)
+                }
+                bindService()
+            }
+        }
+    }
+
+    override suspend fun stopDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            withContext(Dispatchers.Main) {
+                unbindService()
+            }
+            processDataSource.stopDaemon()
+            _daemonPid.value = -1
+        }
     }
 
     override fun setVideoConfigCallback(callback: ((width: Int, height: Int) -> Unit)?) {

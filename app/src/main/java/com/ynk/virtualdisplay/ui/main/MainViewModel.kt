@@ -11,6 +11,7 @@ import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.domain.DisplayInteractor
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import com.ynk.virtualdisplay.manager.ShizukuManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -91,14 +92,28 @@ class MainViewModel(
                 refreshDisplaysInternal()
             }
         }
+
+        // 订阅 PrivilegeMode 和 ServerNode 变化
+        viewModelScope.launch {
+            AppSettings.privilegeModeFlow(appContext).collect { mode ->
+                _uiState.update { it.copy(privilegeMode = mode) }
+            }
+        }
+        viewModelScope.launch {
+            AppSettings.serverNodesFlow(appContext).collect { list ->
+                _uiState.update { it.copy(serverNodes = list) }
+            }
+        }
+        viewModelScope.launch {
+            AppSettings.currentServerNodeCache.collect { node ->
+                _uiState.update { it.copy(currentServerNode = node) }
+            }
+        }
     }
 
-    /**
-     * MVI 意图分发入口。所有用户操作都通过此方法进入。
-     */
     fun handleIntent(intent: MainIntent) {
         when (intent) {
-            is MainIntent.CheckShizuku -> checkShizuku()
+            is MainIntent.CheckShizuku -> checkPrivilegeAndBind()
             is MainIntent.RequestShizukuPermission -> shizukuManager.requestPermission()
             is MainIntent.RefreshDisplays -> refreshDisplays()
             is MainIntent.SwitchTab -> {
@@ -114,16 +129,107 @@ class MainViewModel(
             is MainIntent.UpdateInputs -> updateInputs(intent.width, intent.height, intent.dpi)
             is MainIntent.BindService -> interactor.bindService()
             is MainIntent.UnbindService -> interactor.unbindService()
+            
+            is MainIntent.SelectServerNode -> selectServerNode(intent.node)
+            is MainIntent.AddServerNode -> addServerNode(intent.node)
+            is MainIntent.RemoveServerNode -> removeServerNode(intent.node)
+            is MainIntent.UpdatePrivilegeMode -> updatePrivilegeMode(intent.mode)
+            is MainIntent.CheckRootPermission -> checkRootPermission()
+            is MainIntent.StartServer -> startServer()
+            is MainIntent.StopServer -> stopServer()
         }
     }
 
-    // === Shizuku 相关 ===
+    // === 特权与连接相关 ===
 
-    private fun checkShizuku() {
-        shizukuManager.refreshState()
+    private fun checkPrivilegeAndBind() {
+        val mode = AppSettings.getPrivilegeModeSync()
+        val node = AppSettings.getCurrentServerNodeSync()
+        val isLocal = node.host == "127.0.0.1" || node.host == "localhost"
+
         checkAndInitDeviceMetrics()
-        if (shizukuManager.isAvailable()) {
+
+        if (isLocal && mode != com.ynk.virtualdisplay.data.PrivilegeMode.NONE) {
+            if (mode == com.ynk.virtualdisplay.data.PrivilegeMode.SHIZUKU) {
+                shizukuManager.refreshState()
+                if (shizukuManager.isAvailable()) {
+                    interactor.bindService()
+                } else {
+                    _uiState.update { it.copy(statusMessage = "Shizuku 未就绪") }
+                }
+            } else if (mode == com.ynk.virtualdisplay.data.PrivilegeMode.ROOT) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    val isRoot = isRootAvailable()
+                    _uiState.update { it.copy(rootAvailable = isRoot) }
+                    if (isRoot) {
+                        interactor.bindService()
+                    } else {
+                        _uiState.update { it.copy(statusMessage = "Root 未授权") }
+                    }
+                }
+            }
+        } else {
             interactor.bindService()
+        }
+    }
+
+    private fun selectServerNode(node: com.ynk.virtualdisplay.data.ServerNode) {
+        viewModelScope.launch {
+            AppSettings.setCurrentServerNode(appContext, node)
+            interactor.unbindService()
+            kotlinx.coroutines.delay(300)
+            checkPrivilegeAndBind()
+        }
+    }
+
+    private fun addServerNode(node: com.ynk.virtualdisplay.data.ServerNode) {
+        viewModelScope.launch {
+            AppSettings.addServerNode(appContext, node)
+        }
+    }
+
+    private fun removeServerNode(node: com.ynk.virtualdisplay.data.ServerNode) {
+        viewModelScope.launch {
+            AppSettings.removeServerNode(appContext, node)
+            val current = _uiState.value.currentServerNode
+            if (current.host == node.host && current.port == node.port) {
+                val localNode = com.ynk.virtualdisplay.data.ServerNode("本机", "127.0.0.1", 27183, "")
+                selectServerNode(localNode)
+            }
+        }
+    }
+
+    private fun updatePrivilegeMode(mode: com.ynk.virtualdisplay.data.PrivilegeMode) {
+        viewModelScope.launch {
+            AppSettings.setPrivilegeMode(appContext, mode)
+            interactor.unbindService()
+            kotlinx.coroutines.delay(300)
+            checkPrivilegeAndBind()
+        }
+    }
+
+    private fun checkRootPermission() {
+        _uiState.update { it.copy(rootChecking = true) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val isRoot = isRootAvailable()
+            _uiState.update { it.copy(rootAvailable = isRoot, rootChecking = false) }
+        }
+    }
+
+    private fun isRootAvailable(): Boolean {
+        var process: Process? = null
+        return try {
+            process = Runtime.getRuntime().exec("su")
+            process.outputStream.use { os ->
+                os.write("exit\n".toByteArray())
+                os.flush()
+            }
+            val exitCode = process.waitFor()
+            exitCode == 0
+        } catch (e: Exception) {
+            false
+        } finally {
+            process?.destroy()
         }
     }
 
@@ -267,6 +373,32 @@ class MainViewModel(
                 kotlinx.coroutines.delay(2000)
                 _uiState.update { it.copy(isRestartCooldown = false) }
             }
+        }
+    }
+
+    private fun startServer() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, statusMessage = "正在启动服务端...") }
+            interactor.startDaemon()
+                .onSuccess {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "服务端启动成功") }
+                }
+                .onFailure { e ->
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "启动失败: ${e.message}") }
+                }
+        }
+    }
+
+    private fun stopServer() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, statusMessage = "正在停止服务端...") }
+            interactor.stopDaemon()
+                .onSuccess {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "服务端已停止") }
+                }
+                .onFailure { e ->
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "停止失败: ${e.message}") }
+                }
         }
     }
 

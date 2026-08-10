@@ -24,7 +24,6 @@ import com.ynk.virtualdisplay.R
 class DisplayControlPanel(
     context: Context,
     private val onBackClick: () -> Unit,
-    private val onHomeClick: () -> Unit,
     private val onAppLauncherClick: () -> Unit,
     private val onKeyboardClick: () -> Unit,
     private val onCloseClick: () -> Unit
@@ -151,13 +150,7 @@ class DisplayControlPanel(
         }
         buttonsContainer.addView(backButton)
 
-        // 3. 主页键按钮
-        val homeButton = createControlButton(R.drawable.ic_home) {
-            onHomeClick()
-        }
-        buttonsContainer.addView(homeButton)
-
-        // 4. 应用启动器按钮
+        // 3. 应用启动器按钮
         val appButton = createControlButton(R.drawable.ic_apps) {
             onAppLauncherClick()
         }

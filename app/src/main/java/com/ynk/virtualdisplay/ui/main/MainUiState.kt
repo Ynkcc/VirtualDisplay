@@ -34,7 +34,14 @@ data class MainUiState(
     // 输入相关状态
     val inputWidth: String = "",
     val inputHeight: String = "",
-    val inputDpi: String = ""
+    val inputDpi: String = "",
+    
+    // 权限与设备切换状态
+    val privilegeMode: com.ynk.virtualdisplay.data.PrivilegeMode = com.ynk.virtualdisplay.data.PrivilegeMode.SHIZUKU,
+    val serverNodes: List<com.ynk.virtualdisplay.data.ServerNode> = emptyList(),
+    val currentServerNode: com.ynk.virtualdisplay.data.ServerNode = com.ynk.virtualdisplay.data.ServerNode("本机", "127.0.0.1", 27183, ""),
+    val rootAvailable: Boolean = false,
+    val rootChecking: Boolean = false
 )
 
 /**
@@ -64,6 +71,15 @@ sealed class MainIntent {
     data object BindService : MainIntent()
     /** 解绑服务 */
     data object UnbindService : MainIntent()
+
+    // 外部服务端及特权切换 Intent
+    data class SelectServerNode(val node: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
+    data class AddServerNode(val node: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
+    data class RemoveServerNode(val node: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
+    data class UpdatePrivilegeMode(val mode: com.ynk.virtualdisplay.data.PrivilegeMode) : MainIntent()
+    data object CheckRootPermission : MainIntent()
+    data object StartServer : MainIntent()
+    data object StopServer : MainIntent()
 }
 
 /**

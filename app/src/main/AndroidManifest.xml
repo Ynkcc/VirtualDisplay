@@ -46,6 +46,7 @@
             android:name=".ui.display.DisplayActivity"
             android:exported="false"
             android:label="Display Player"
+            android:launchMode="singleTask"
             android:enableOnBackInvokedCallback="false"
             tools:targetApi="tiramisu"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density"

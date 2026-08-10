@@ -20,6 +20,35 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
+enum class PrivilegeMode {
+    SHIZUKU,
+    ROOT,
+    NONE
+}
+
+data class ServerNode(
+    val name: String,
+    val host: String,
+    val port: Int,
+    val password: String = ""
+) {
+    fun toSerializedString(): String {
+        return "$name|$host|$port|$password"
+    }
+
+    companion object {
+        fun fromSerializedString(str: String): ServerNode? {
+            val parts = str.split("|")
+            if (parts.size < 3) return null
+            val name = parts[0]
+            val host = parts[1]
+            val port = parts[2].toIntOrNull() ?: 27183
+            val password = if (parts.size > 3) parts[3] else ""
+            return ServerNode(name, host, port, password)
+        }
+    }
+}
+
 object AppSettings {
 
     private const val PREFS_NAME = "virtual_display_settings"
@@ -47,12 +76,26 @@ object AppSettings {
     val prefDefaultWidthKey = stringPreferencesKey("pref_default_width")
     val prefDefaultHeightKey = stringPreferencesKey("pref_default_height")
     val prefDefaultDpiKey = stringPreferencesKey("pref_default_dpi")
+    
+    val serverNodesKey = stringPreferencesKey("server_nodes")
+    val currentServerNodeKey = stringPreferencesKey("current_server_node")
+    val privilegeModeKey = stringPreferencesKey("privilege_mode")
+    val autoStartServerKey = booleanPreferencesKey("auto_start_server")
 
     private val _captureBackCache = MutableStateFlow(false)
     val captureBackCache: StateFlow<Boolean> = _captureBackCache
 
     private val _showPerformanceStatsCache = MutableStateFlow(true)
     val showPerformanceStatsCache: StateFlow<Boolean> = _showPerformanceStatsCache
+
+    private val _privilegeModeCache = MutableStateFlow(PrivilegeMode.SHIZUKU)
+    val privilegeModeCache: StateFlow<PrivilegeMode> = _privilegeModeCache
+
+    private val _currentServerNodeCache = MutableStateFlow(ServerNode("本机", "127.0.0.1", 27183, ""))
+    val currentServerNodeCache: StateFlow<ServerNode> = _currentServerNodeCache
+
+    private val _autoStartServerCache = MutableStateFlow(true)
+    val autoStartServerCache: StateFlow<Boolean> = _autoStartServerCache
 
     @Volatile
     private var initialized = false
@@ -66,6 +109,18 @@ object AppSettings {
             appContext.dataStore.data.collect { prefs ->
                 _captureBackCache.value = prefs[captureBackKey] ?: false
                 _showPerformanceStatsCache.value = prefs[showPerformanceStatsKey] ?: true
+                _autoStartServerCache.value = prefs[autoStartServerKey] ?: true
+                
+                val modeStr = prefs[privilegeModeKey] ?: PrivilegeMode.SHIZUKU.name
+                _privilegeModeCache.value = try {
+                    PrivilegeMode.valueOf(modeStr)
+                } catch (e: Exception) {
+                    PrivilegeMode.SHIZUKU
+                }
+
+                val nodeStr = prefs[currentServerNodeKey] ?: ""
+                val node = ServerNode.fromSerializedString(nodeStr) ?: ServerNode("本机", "127.0.0.1", 27183, "")
+                _currentServerNodeCache.value = node
             }
         }
     }
@@ -222,5 +277,75 @@ object AppSettings {
             val raw = prefs[recentAppsKey] ?: ""
             if (raw.isEmpty()) emptyList() else raw.split(",")
         }
+    }
+    fun getPrivilegeModeSync(): PrivilegeMode = _privilegeModeCache.value
+
+    fun getCurrentServerNodeSync(): ServerNode = _currentServerNodeCache.value
+
+    fun serverNodesFlow(context: Context): Flow<List<ServerNode>> {
+        return context.applicationContext.dataStore.data.map { prefs ->
+            val raw = prefs[serverNodesKey] ?: ""
+            if (raw.isEmpty()) {
+                listOf(ServerNode("本机", "127.0.0.1", 27183, ""))
+            } else {
+                raw.split(",").mapNotNull { ServerNode.fromSerializedString(it) }
+            }
+        }
+    }
+
+    suspend fun getServerNodes(context: Context): List<ServerNode> {
+        val raw = context.applicationContext.dataStore.data.first()[serverNodesKey] ?: ""
+        return if (raw.isEmpty()) {
+            listOf(ServerNode("本机", "127.0.0.1", 27183, ""))
+        } else {
+            raw.split(",").mapNotNull { ServerNode.fromSerializedString(it) }
+        }
+    }
+
+    suspend fun addServerNode(context: Context, node: ServerNode) {
+        val currentList = getServerNodes(context).toMutableList()
+        currentList.removeAll { it.host == node.host && it.port == node.port }
+        currentList.add(node)
+        val serialized = currentList.joinToString(",") { it.toSerializedString() }
+        context.applicationContext.dataStore.edit { it[serverNodesKey] = serialized }
+    }
+
+    suspend fun removeServerNode(context: Context, node: ServerNode) {
+        val currentList = getServerNodes(context).toMutableList()
+        currentList.removeAll { it.host == node.host && it.port == node.port }
+        val serialized = currentList.joinToString(",") { it.toSerializedString() }
+        context.applicationContext.dataStore.edit { it[serverNodesKey] = serialized }
+    }
+
+    suspend fun setCurrentServerNode(context: Context, node: ServerNode) {
+        context.applicationContext.dataStore.edit { prefs ->
+            prefs[currentServerNodeKey] = node.toSerializedString()
+            prefs[serverHostKey] = node.host
+            prefs[serverPortKey] = node.port
+            prefs[serverPasswordKey] = node.password
+        }
+    }
+
+    fun privilegeModeFlow(context: Context): Flow<PrivilegeMode> {
+        return context.applicationContext.dataStore.data.map { prefs ->
+            val modeStr = prefs[privilegeModeKey] ?: PrivilegeMode.SHIZUKU.name
+            try { PrivilegeMode.valueOf(modeStr) } catch (e: Exception) { PrivilegeMode.SHIZUKU }
+        }
+    }
+
+    suspend fun setPrivilegeMode(context: Context, mode: PrivilegeMode) {
+        context.applicationContext.dataStore.edit { it[privilegeModeKey] = mode.name }
+    }
+
+    fun autoStartServerFlow(context: Context): Flow<Boolean> {
+        return context.applicationContext.dataStore.data.map { prefs ->
+            prefs[autoStartServerKey] ?: true
+        }
+    }
+
+    fun getAutoStartServerSync(): Boolean = _autoStartServerCache.value
+
+    suspend fun setAutoStartServer(context: Context, enabled: Boolean) {
+        context.applicationContext.dataStore.edit { it[autoStartServerKey] = enabled }
     }
 }

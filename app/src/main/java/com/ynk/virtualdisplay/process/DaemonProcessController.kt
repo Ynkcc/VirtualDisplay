@@ -2,7 +2,9 @@ package com.ynk.virtualdisplay.process
 
 import android.content.Context
 import android.util.Log
+import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.DaemonPrefs
+import com.ynk.virtualdisplay.data.PrivilegeMode
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuRemoteProcess
 import java.io.IOException
@@ -41,9 +43,11 @@ class DaemonProcessController(private val context: Context) {
     }
 
     private fun findDaemonPid(port: Int): Int {
+        val mode = AppSettings.getPrivilegeModeSync()
+        if (mode == PrivilegeMode.NONE) return -1
         return try {
             val script = "for pid in \$(pgrep -f [c]om.genymobile.scrcpy.Server); do if cat /proc/\$pid/cmdline | grep -q \"daemon_port=$port\"; then echo \$pid; break; fi; done"
-            val proc = invokeNewProcess(arrayOf("sh", "-c", script), null, null)
+            val proc = executeCommand(arrayOf("sh", "-c", script), null, null)
             if (proc != null) {
                 val output = proc.inputStream.bufferedReader().use { it.readText() }.trim()
                 proc.waitFor()
@@ -79,6 +83,11 @@ class DaemonProcessController(private val context: Context) {
     }
 
     fun startDaemon(port: Int, address: String = "127.0.0.1", password: String? = null): Boolean {
+        val mode = AppSettings.getPrivilegeModeSync()
+        if (mode == PrivilegeMode.NONE) {
+            Log.i(TAG, "None mode, skipping startDaemon")
+            return false
+        }
         val savedPid = findDaemonPid(port)
         if (savedPid > 0) {
             Log.i(TAG, "Daemon is already running with pid $savedPid on port $port. Reusing it.")
@@ -91,16 +100,16 @@ class DaemonProcessController(private val context: Context) {
         cachedPid = -1
 
         return try {
+            val classpath = context.packageCodePath + ":" + context.applicationInfo.sourceDir
             // Debug 构建开启 VERBOSE 日志便于排查；Release 构建降至 INFO 减少日志噪声。
             val logLevel = if (com.ynk.virtualdisplay.BuildConfig.DEBUG) "VERBOSE" else "INFO"
             val passwordArg = if (!password.isNullOrEmpty()) " daemon_secret_token='${password.replace("'", "'\\''")}'" else ""
             val cmd = arrayOf(
                 "sh",
                 "-c",
-                "nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false log_level=$logLevel daemon=true daemon_port=$port daemon_bind_address=$address$passwordArg >/dev/null 2>&1 &"
+                "export CLASSPATH=$classpath && nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false log_level=$logLevel daemon=true daemon_port=$port daemon_bind_address=$address$passwordArg >/dev/null 2>&1 &"
             )
 
-            val classpath = context.packageCodePath + ":" + context.applicationInfo.sourceDir
             val envList = mutableListOf<String>()
             System.getenv().forEach { (key, value) ->
                 if (key != "CLASSPATH") {
@@ -110,7 +119,7 @@ class DaemonProcessController(private val context: Context) {
             envList.add("CLASSPATH=$classpath")
             val env = envList.toTypedArray()
 
-            val remoteProcess = invokeNewProcess(cmd, env, null)
+            val remoteProcess = executeCommand(cmd, env, null)
             if (remoteProcess != null) {
                 process = remoteProcess
 
@@ -140,7 +149,7 @@ class DaemonProcessController(private val context: Context) {
                 }
                 ready
             } else {
-                Log.e(TAG, "Failed to invoke Shizuku.newProcess")
+                Log.e(TAG, "Failed to executeCommand")
                 false
             }
         } catch (e: Exception) {
@@ -150,9 +159,10 @@ class DaemonProcessController(private val context: Context) {
     }
 
     private fun isPortOpen(host: String, port: Int): Boolean {
+        val connectHost = if (host == "0.0.0.0") "127.0.0.1" else host
         return try {
             Socket().use { s ->
-                s.connect(InetSocketAddress(host, port), PORT_PROBE_TIMEOUT_MS)
+                s.connect(InetSocketAddress(connectHost, port), PORT_PROBE_TIMEOUT_MS)
                 true
             }
         } catch (e: IOException) {
@@ -175,13 +185,18 @@ class DaemonProcessController(private val context: Context) {
     }
 
     fun stopDaemon() {
+        val mode = AppSettings.getPrivilegeModeSync()
+        if (mode == PrivilegeMode.NONE) {
+            Log.i(TAG, "None mode, skipping stopDaemon")
+            return
+        }
         val savedPort = daemonPrefs.getSavedPortSync()
         val port = if (savedPort > 0) savedPort else 27183
         val pid = getSavedPid(port)
         try {
             Log.i(TAG, "Attempting to stop daemon with pid $pid...")
             if (pid > 0) {
-                var proc = invokeNewProcess(arrayOf("kill", pid.toString()), null, null)
+                var proc = executeCommand(arrayOf("kill", pid.toString()), null, null)
                 proc?.waitFor()
                 
                 var checkCount = 0
@@ -192,7 +207,7 @@ class DaemonProcessController(private val context: Context) {
 
                 if (findDaemonPid(port) == pid) {
                     Log.w(TAG, "Daemon process $pid still alive after SIGTERM, sending SIGKILL...")
-                    proc = invokeNewProcess(arrayOf("kill", "-9", pid.toString()), null, null)
+                    proc = executeCommand(arrayOf("kill", "-9", pid.toString()), null, null)
                     proc?.waitFor()
                 }
             }
@@ -207,12 +222,45 @@ class DaemonProcessController(private val context: Context) {
     }
 
     fun isDaemonRunning(): Boolean {
+        val mode = AppSettings.getPrivilegeModeSync()
+        if (mode == PrivilegeMode.NONE) return false
         val savedPort = daemonPrefs.getSavedPortSync()
         val port = if (savedPort > 0) savedPort else 27183
         return findDaemonPid(port) > 0
     }
 
-    private fun invokeNewProcess(cmd: Array<String>, env: Array<String>?, dir: String?): ShizukuRemoteProcess? {
+    private fun executeCommand(cmd: Array<String>, env: Array<String>? = null, dir: String? = null): Process? {
+        val mode = AppSettings.getPrivilegeModeSync()
+        return when (mode) {
+            PrivilegeMode.SHIZUKU -> {
+                invokeNewProcess(cmd, env, dir)
+            }
+            PrivilegeMode.ROOT -> {
+                try {
+                    val finalCmd = if (cmd.size >= 2 && cmd[0] == "sh" && cmd[1] == "-c") {
+                        arrayOf("su", "-c", cmd[2])
+                    } else if (cmd.isNotEmpty() && cmd[0] == "kill") {
+                        arrayOf("su", "-c", cmd.joinToString(" "))
+                    } else {
+                        arrayOf("su", "-c", cmd.joinToString(" "))
+                    }
+                    Runtime.getRuntime().exec(finalCmd, env, dir?.let { java.io.File(it) })
+                } catch (e: Exception) {
+                    Log.e(TAG, "Root execution failed", e)
+                    null
+                }
+            }
+            PrivilegeMode.NONE -> {
+                try {
+                    Runtime.getRuntime().exec(cmd, env, dir?.let { java.io.File(it) })
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }
+    }
+
+    private fun invokeNewProcess(cmd: Array<String>, env: Array<String>?, dir: String?): Process? {
         return try {
             val method = Shizuku::class.java.getDeclaredMethod(
                 "newProcess",
@@ -221,8 +269,7 @@ class DaemonProcessController(private val context: Context) {
                 String::class.java
             )
             method.isAccessible = true
-            @Suppress("UNCHECKED_CAST")
-            method.invoke(null, cmd, env, dir) as? ShizukuRemoteProcess
+            method.invoke(null, cmd, env, dir) as? Process
         } catch (e: Exception) {
             Log.e(TAG, "invokeNewProcess via reflection failed", e)
             null
