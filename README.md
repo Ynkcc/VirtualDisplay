@@ -28,6 +28,8 @@
   请确保以 **adb / shell 身份**激活 Shizuku，而非以 Root 身份激活。
   部分设备的 [`DisplayManagerService`](https://github.com/cn00/android/blob/master/services/core/java/com/android/server/display/DisplayManagerService.java#L1532) 会校验调用者的 UID 与 packageName 是否匹配；而scrcpy 通过将 `PACKAGE_NAME` 固定为 `"com.android.shell"`，以 Root 身份运行时 会导致二者不匹配从而抛出 `SecurityException`。（ 本项目暂未对此进行修复。）
 
+- 端口监听和连接其他设备有bug，基本用不了，最近没空，过段时间再修，视频传输也存在一定问题。应该需要重新调整出一个清晰的架构。
+
 - **其他问题 **
   有其他问题或建议，欢迎在 [GitHub 仓库](https://github.com/Ynkcc/VirtualDisplay/issues) 提交问题。
   消极维护，有能力的话建议自行处理。
