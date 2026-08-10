@@ -52,7 +52,7 @@ fun SettingsScreen(
         mutableStateMapOf<String, Boolean>()
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(uiState.currentServerNode) {
         val flags = AppSettings.getFlags(context)
         ALL_DISPLAY_FLAGS.forEach { flag ->
             flagStates[flag.key] = flags[flag.key] ?: flag.isDefaultEnabled

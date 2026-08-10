@@ -133,6 +133,18 @@ sealed class ControlMessage {
         }
     }
 
+    data class LaunchHome(val displayId: Int) : ControlMessage() {
+        override val type: Int = TYPE_LAUNCH_HOME
+        override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
+            writeInt(displayId)
+        }
+    }
+
+    object ListApps : ControlMessage() {
+        override val type: Int = TYPE_LIST_APPS
+        override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {}
+    }
+
     protected fun buildMessage(type: Int, sequence: Long, block: DataOutputStream.() -> Unit): ByteArray {
         val baos = ByteArrayOutputStream()
         DataOutputStream(baos).use { dos ->
@@ -165,6 +177,8 @@ sealed class ControlMessage {
         const val TYPE_IS_ROTATION_FROZEN = 214
         const val TYPE_GET_ACTIVE_DISPLAY_INFOS = 215
         const val TYPE_CONFIGURE_SESSION = 216
+        const val TYPE_LAUNCH_HOME = 217
+        const val TYPE_LIST_APPS = 218
     }
 }
 

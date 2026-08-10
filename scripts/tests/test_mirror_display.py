@@ -22,6 +22,7 @@ def _take_screenshot_with_ffmpeg(raw_h264: str, output_png: str) -> bool:
     cmd = [
         "ffmpeg", "-v", "error", "-y",
         "-f", "h264", "-i", raw_h264,
+        "-vf", "zscale=matrix=bt709,format=yuv420p",
         "-frames:v", "1",
         "-f", "image2", output_png
     ]

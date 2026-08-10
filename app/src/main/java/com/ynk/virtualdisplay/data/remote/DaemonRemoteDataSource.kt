@@ -39,6 +39,12 @@ class DaemonRemoteDataSource(
     suspend fun startActivity(packageName: String, displayId: Int): Result<Int> =
         controlApi.startActivity(packageName, displayId)
 
+    suspend fun launchHome(displayId: Int): Result<Int> =
+        controlApi.launchHome(displayId)
+
+    suspend fun listApps(): Result<List<com.ynk.virtualdisplay.protocol.DeviceMessage.AppEntry>> =
+        controlApi.listApps()
+
     // === 输入注入 (scrcpy-native protocol via ROLE_CONTROL socket) ===
 
     suspend fun injectInput(

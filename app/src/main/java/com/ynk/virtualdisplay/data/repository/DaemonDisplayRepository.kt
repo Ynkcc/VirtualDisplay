@@ -1,7 +1,6 @@
 package com.ynk.virtualdisplay.data.repository
 
 import android.content.Context
-import android.hardware.display.DisplayManager
 import android.util.Log
 import android.view.InputEvent
 import android.view.Surface
@@ -11,9 +10,9 @@ import com.ynk.virtualdisplay.data.model.SavedDisplay
 import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
 import com.ynk.virtualdisplay.data.process.DaemonProcessDataSource
 import com.ynk.virtualdisplay.data.remote.DaemonRemoteDataSource
-import com.ynk.virtualdisplay.data.system.LauncherDataSource
 import com.ynk.virtualdisplay.manager.ShizukuManager
 import com.ynk.virtualdisplay.net.DaemonTransport
+import com.ynk.virtualdisplay.protocol.DeviceMessage
 import com.ynk.virtualdisplay.rpc.DaemonRpc
 import com.ynk.virtualdisplay.rpc.DaemonRpcState
 import com.ynk.virtualdisplay.util.ExceptionUtils
@@ -32,12 +31,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 显示器仓库实现：协调 4 个 DataSource + 传输/视频流组件，完成虚拟显示器的管理。
+ * 显示器仓库实现：协调 DataSource + 传输/视频流组件，完成虚拟显示器的管理。
  *
  * 数据源拆分（严格遵循方案二分层）：
  * - [settingsDataSource]   → 本地配置读写（AppSettings / DataStore）
- * - [remoteDataSource]     → 远程 RPC 调用（Daemon 控制命令）
- * - [launcherDataSource]   → 系统服务查询（Launcher 列表 / DisplayManager）
+ * - [remoteDataSource]     → 远程 RPC 调用（Daemon 控制命令，含 launchHome / listApps）
  * - [processDataSource]    → 守护进程生命周期控制（启动/停止/查 PID）
  *
  * 仍直接持有的状态性组件（不属于"纯数据"DataSource 职责）：
@@ -53,7 +51,6 @@ class DaemonDisplayRepository(
     private val context: Context,
     private val settingsDataSource: AppSettingsDataSource,
     private val remoteDataSource: DaemonRemoteDataSource,
-    private val launcherDataSource: LauncherDataSource,
     private val processDataSource: DaemonProcessDataSource,
     private val transport: DaemonTransport,
     private val rpc: DaemonRpc,
@@ -135,6 +132,9 @@ class DaemonDisplayRepository(
                 var attempt = 0
                 val baseDelayMs = 200L
                 val maxDelayMs = 3000L
+                // 远程节点无法重启服务端进程，超过此次数后放弃重连，告知用户服务端已断开
+                val isLocal = currentNode.name == "本机"
+                val maxRemoteAttempts = if (isLocal) Int.MAX_VALUE else 5
                 while (isBound) {
                     attempt++
                     val delayMs = (baseDelayMs * (1L shl (attempt - 1))).coerceAtMost(maxDelayMs)
@@ -147,10 +147,6 @@ class DaemonDisplayRepository(
                     // Hence we also probe the daemon TCP port with a short-lived
                     // socket; if port probe fails, treat the daemon as dead and
                     // restart it regardless of the cached PID.
-                    val isLocal = currentNode.name == "本机" || 
-                                  currentNode.host == "127.0.0.1" || 
-                                  currentNode.host == "localhost" || 
-                                  currentNode.host == "0.0.0.0"
                     val privilegeMode = AppSettings.getPrivilegeModeSync()
 
                     if (isLocal && privilegeMode != PrivilegeMode.NONE) {
@@ -198,6 +194,12 @@ class DaemonDisplayRepository(
                         return@launch
                     }
                     Log.w(TAG, "Auto-reconnect: transport.connect failed (attempt $attempt), backing off ${delayMs}ms")
+                    if (attempt >= maxRemoteAttempts) {
+                        Log.w(TAG, "Auto-reconnect: reached max attempts ($maxRemoteAttempts), giving up. Server disconnected.")
+                        _connectionError.value = "服务端已断开，请手动重连"
+                        _connectionStatus.value = ConnectionStatus.DISCONNECTED
+                        return@launch
+                    }
                     kotlinx.coroutines.delay(delayMs)
                 }
             }
@@ -220,20 +222,12 @@ class DaemonDisplayRepository(
         }
     }
 
-    private val displayListener = object : DisplayManager.DisplayListener {
-        override fun onDisplayAdded(displayId: Int) { refreshManagedDisplays() }
-        override fun onDisplayRemoved(displayId: Int) { refreshManagedDisplays() }
-        override fun onDisplayChanged(displayId: Int) { refreshManagedDisplays() }
-    }
-
     override fun bindService() {
         if (isBound) {
             Log.d(TAG, "Already bound, skipping bindService")
             return
         }
         isBound = true
-        // 通过 LauncherDataSource（System 数据源）管理 DisplayListener
-        launcherDataSource.registerDisplayListener(displayListener)
 
         scope.launch {
             try {
@@ -254,10 +248,7 @@ class DaemonDisplayRepository(
                     )
                 }
 
-                val isLocal = currentNode.name == "本机" || 
-                              currentNode.host == "127.0.0.1" || 
-                              currentNode.host == "localhost" || 
-                              currentNode.host == "0.0.0.0"
+                val isLocal = currentNode.name == "本机"
                 val privilegeMode = AppSettings.getPrivilegeModeSync()
 
                 if (isLocal && privilegeMode != PrivilegeMode.NONE) {
@@ -321,7 +312,6 @@ class DaemonDisplayRepository(
             return
         }
         isBound = false
-        launcherDataSource.unregisterDisplayListener(displayListener)
         launchCleanupOnce(killDaemon = false)
     }
 
@@ -357,10 +347,7 @@ class DaemonDisplayRepository(
     private fun refreshManagedDisplays() {
         scope.launch {
             val currentNode = AppSettings.getCurrentServerNodeSync()
-            val isLocal = currentNode.name == "本机" || 
-                          currentNode.host == "127.0.0.1" || 
-                          currentNode.host == "localhost" || 
-                          currentNode.host == "0.0.0.0"
+            val isLocal = currentNode.name == "本机"
             if (isLocal) {
                 _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
             } else {
@@ -437,7 +424,7 @@ class DaemonDisplayRepository(
             AppSettings.removeDisplayForServer(context, currentNode, displayId)
             
             if (currentStreamingDisplayId == displayId) {
-                videoController.stop(force = true)
+                videoController.stop()
                 currentStreamingDisplayId = -1
             }
             refreshManagedDisplays()
@@ -509,24 +496,11 @@ class DaemonDisplayRepository(
         return result
     }
 
-    override suspend fun launchHome(displayId: Int): Result<Int> {
-        // Launcher 列表 → System DataSource
-        val launcherPackages = launcherDataSource.resolveHomeLauncherPackages()
-        if (launcherPackages.isEmpty()) {
-            return Result.failure(IllegalStateException("No home launcher found on device"))
-        }
-        var lastError: Throwable? = null
-        for (packageName in launcherPackages) {
-            val result = remoteDataSource.startActivity(packageName, displayId)
-            result.onSuccess {
-                Log.i(TAG, "Launch home via $packageName succeeded")
-                return result
-            }
-            lastError = result.exceptionOrNull()
-            Log.w(TAG, "Launch home via $packageName failed, trying next", lastError)
-        }
-        return Result.failure(lastError ?: IllegalStateException("Failed to launch home"))
-    }
+    override suspend fun launchHome(displayId: Int): Result<Int> =
+        remoteDataSource.launchHome(displayId)
+
+    override suspend fun listApps(): Result<List<DeviceMessage.AppEntry>> =
+        remoteDataSource.listApps()
 
     override suspend fun injectInput(event: InputEvent): Result<Boolean> {
         return injectInputWithDisplayId(event, 0)
@@ -548,18 +522,15 @@ class DaemonDisplayRepository(
         return Result.success(_managedDisplayIds.value.toIntArray())
     }
 
+    override suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>> =
+        remoteDataSource.getActiveDisplayInfos()
+
     override fun destroyService() {
         isBound = false
-        launcherDataSource.unregisterDisplayListener(displayListener)
         val job = launchCleanupOnce(killDaemon = true)
         runCatching {
             runBlocking {
                 withTimeoutOrNull(3000) { job.join() }
-            }
-        }
-        runCatching {
-            runBlocking {
-                withContext(Dispatchers.IO) { processDataSource.stopDaemon() }
             }
         }
         scope.cancel()
@@ -567,41 +538,20 @@ class DaemonDisplayRepository(
 
     override suspend fun startDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val currentNode = AppSettings.getCurrentServerNodeSync()
-            val (host, port, password) = if (currentNode.name == "本机") {
-                Triple(
-                    settingsDataSource.getServerHost(),
-                    settingsDataSource.getServerPort(),
-                    settingsDataSource.getServerPassword()
-                )
-            } else {
-                Triple(
-                    currentNode.host,
-                    currentNode.port,
-                    currentNode.password
-                )
+            // 已处于连接状态，不打断现有连接
+            if (_connectionStatus.value == ConnectionStatus.CONNECTED) {
+                Log.d(TAG, "startDaemon: already connected, skipping")
+                return@runCatching
             }
-            val isLocal = currentNode.name == "本机" || 
-                          currentNode.host == "127.0.0.1" || 
-                          currentNode.host == "localhost" || 
-                          currentNode.host == "0.0.0.0"
-            val privilegeMode = AppSettings.getPrivilegeModeSync()
-
-            if (isLocal && privilegeMode != PrivilegeMode.NONE) {
-                if (privilegeMode == PrivilegeMode.SHIZUKU && !shizukuManager.isAvailable()) {
-                    throw Exception("Shizuku is not available")
+            // 先完整停止（若当前已绑定但未连接）
+            if (isBound) {
+                val job = withContext(Dispatchers.Main) {
+                    isBound = false
+                    launchCleanupOnce(killDaemon = false)
                 }
-                val started = processDataSource.startDaemon(port, host, password)
-                if (!started) {
-                    throw Exception("Failed to start daemon process")
-                }
-                _daemonPid.value = processDataSource.getDaemonPid()
+                withTimeoutOrNull(1000) { job.join() }
             }
             withContext(Dispatchers.Main) {
-                if (isBound) {
-                    unbindService()
-                    kotlinx.coroutines.delay(300)
-                }
                 bindService()
             }
         }
@@ -609,12 +559,14 @@ class DaemonDisplayRepository(
 
     override suspend fun stopDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            withContext(Dispatchers.Main) {
-                unbindService()
+            // launchCleanupOnce(killDaemon=true) 会依次：取消重连、停止视频流、
+            // 发送 exitDaemon 命令、断开 transport、杀守护进程、重置状态
+            val job = withContext(Dispatchers.Main) {
+                isBound = false
+                launchCleanupOnce(killDaemon = true)
             }
-            processDataSource.stopDaemon()
-            _daemonPid.value = -1
-        }
+            withTimeoutOrNull(3000) { job.join() }
+        }.map { }
     }
 
     override fun setVideoConfigCallback(callback: ((width: Int, height: Int) -> Unit)?) {

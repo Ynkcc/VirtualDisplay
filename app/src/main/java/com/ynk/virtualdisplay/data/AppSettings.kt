@@ -35,6 +35,9 @@ data class ServerNode(
     val port: Int,
     val password: String = ""
 ) {
+    /** 是否为本机节点（可启动/停止守护进程） */
+    val isLocal: Boolean get() = host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0"
+
     fun uniqueKey(): String {
         return "${host.replace(".", "_")}_$port"
     }
@@ -130,9 +133,10 @@ object AppSettings {
                     PrivilegeMode.SHIZUKU
                 }
 
+                // currentServerNode 仅用于 per-node 数据隔离（flags、显示器存储等）
+                // 实际连接地址/端口永远从用户配置项（serverHostKey/serverPortKey）读取
                 val nodeStr = prefs[currentServerNodeKey] ?: ""
-                val node = ServerNode.fromSerializedString(nodeStr) ?: ServerNode("本机", "127.0.0.1", 27183, "")
-                _currentServerNodeCache.value = node
+                _currentServerNodeCache.value = ServerNode.fromSerializedString(nodeStr) ?: ServerNode("本机", "127.0.0.1", 27183, "")
             }
         }
     }
@@ -425,11 +429,9 @@ object AppSettings {
     }
 
     suspend fun setCurrentServerNode(context: Context, node: ServerNode) {
+        // 仅写入节点身份，不覆写用户配置的监听地址/端口/密码
         context.applicationContext.dataStore.edit { prefs ->
             prefs[currentServerNodeKey] = node.toSerializedString()
-            prefs[serverHostKey] = node.host
-            prefs[serverPortKey] = node.port
-            prefs[serverPasswordKey] = node.password
         }
     }
 

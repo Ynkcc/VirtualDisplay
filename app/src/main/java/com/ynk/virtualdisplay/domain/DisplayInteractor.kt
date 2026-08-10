@@ -2,7 +2,6 @@ package com.ynk.virtualdisplay.domain
 
 import android.content.Context
 import android.content.Intent
-import android.hardware.display.DisplayManager
 import android.os.Parcel
 import android.util.Log
 import android.view.InputEvent
@@ -14,6 +13,7 @@ import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.data.repository.RecentAppHelper
 import com.ynk.virtualdisplay.manager.ShizukuManager
+import com.ynk.virtualdisplay.protocol.DeviceMessage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 
@@ -68,12 +68,26 @@ class DisplayInteractor(
     }
 
     /**
-     * 重启守护进程事务：解绑 → 延迟 → 重新绑定。
+     * 切换活跃节点。
+     */
+    fun setActiveNode(node: com.ynk.virtualdisplay.data.ServerNode) {
+        repository.setActiveNode(node)
+    }
+
+    /**
+     * 获取指定节点的仓库槽位。
+     */
+    fun getSlot(nodeKey: String): IDisplayRepository? {
+        return repository.getSlot(nodeKey)
+    }
+
+    /**
+     * 重启守护进程：完整停止（杀进程+断连）→ 延迟 → 重新启动并连接。
      */
     suspend fun restartDaemon(): Result<Unit> = runCatching {
-        repository.unbindService()
+        repository.stopDaemon().getOrThrow()
         delay(500)
-        repository.bindService()
+        repository.startDaemon().getOrThrow()
     }
 
     suspend fun startDaemon(): Result<Unit> {
@@ -144,6 +158,13 @@ class DisplayInteractor(
      */
     suspend fun launchHome(displayId: Int): Result<Int> {
         return repository.launchHome(displayId)
+    }
+
+    /**
+     * 查询远程设备上已安装应用列表。
+     */
+    suspend fun listApps(): Result<List<DeviceMessage.AppEntry>> {
+        return repository.listApps()
     }
 
     /**

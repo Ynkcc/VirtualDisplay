@@ -3,9 +3,9 @@ package com.ynk.virtualdisplay.di
 import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
 import com.ynk.virtualdisplay.data.process.DaemonProcessDataSource
 import com.ynk.virtualdisplay.data.remote.DaemonRemoteDataSource
-import com.ynk.virtualdisplay.data.repository.DaemonDisplayRepository
+import com.ynk.virtualdisplay.data.repository.MultiConnectionRepository
+import com.ynk.virtualdisplay.data.repository.ConnectionSlotFactory
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
-import com.ynk.virtualdisplay.data.system.LauncherDataSource
 import com.ynk.virtualdisplay.domain.DisplayInteractor
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import com.ynk.virtualdisplay.manager.ShizukuManager
@@ -53,29 +53,30 @@ val appModule = module {
 
     single { VideoStreamController(get(), get()) }
 
-    // === Data 层 DataSource（4 个方向）===
+    // === Data 层 DataSource ===
     // Local：  AppSettings / DaemonPrefs 本地配置读写
-    // Remote： Daemon 控制命令 RPC 调用
-    // System： PackageManager / DisplayManager 系统服务查询
-    // Process：Daemon 进程生命周期控制
+    // Remote： Daemon 控制命令 RPC 调用（launchHome / listApps / startActivity 等统一走 RPC）
+    // Process：Daemon 进程生命周期控制（本机节点独有）
     single { AppSettingsDataSource(androidContext()) }
     single { DaemonRemoteDataSource(get()) }
-    single { LauncherDataSource(androidContext()) }
     single { DaemonProcessDataSource(get()) }
 
-    // === 数据层 ===
-    // Repository 只做数据编排，调用 4 个 DataSource + transport/rpc/videoController
-    single<IDisplayRepository> {
-        DaemonDisplayRepository(
+    // === Multi-Connection Infrastructure ===
+    single {
+        ConnectionSlotFactory(
             context = androidContext(),
             settingsDataSource = get(),
-            remoteDataSource = get(),
-            launcherDataSource = get(),
             processDataSource = get(),
-            transport = get(),
-            rpc = get(),
-            videoController = get(),
             shizukuManager = get()
+        )
+    }
+
+    // === 数据层 ===
+    // Repository 只做数据编排，调用 DataSource + transport/rpc/videoController
+    single<IDisplayRepository> {
+        MultiConnectionRepository(
+            slotFactory = get(),
+            scope = get() // Using the same scope as VideoStreamController
         )
     }
 

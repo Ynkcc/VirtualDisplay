@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.InputEvent
 import android.view.Surface
 import com.ynk.virtualdisplay.data.AppSettings
+import com.ynk.virtualdisplay.protocol.DeviceMessage
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -72,6 +73,9 @@ interface IDisplayRepository {
     /** 在指定显示器启动主屏幕/Launcher */
     suspend fun launchHome(displayId: Int): Result<Int>
 
+    /** 列出远程设备上已安装应用（用于 AppSelectionDialog） */
+    suspend fun listApps(): Result<List<DeviceMessage.AppEntry>>
+
     /** 注入输入事件 */
     suspend fun injectInput(event: InputEvent): Result<Boolean>
 
@@ -81,6 +85,9 @@ interface IDisplayRepository {
 
     /** 获取当前 Daemon 中的活动显示器 ID 列表 */
     suspend fun getActiveDisplayIds(): Result<IntArray>
+
+    /** 获取当前 Daemon 中活动显示器的详细信息（尺寸/DPI/rotation） */
+    suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>>
 
     /** 销毁远程特权服务 */
     fun destroyService()
@@ -93,6 +100,17 @@ interface IDisplayRepository {
 
     /** 主动向守护进程拉取并同步当前管理的显示器列表 (缓存) */
     fun refreshDisplays()
+
+    /** 切换活跃节点（仅 MultiConnectionRepository 有意义） */
+    fun setActiveNode(node: com.ynk.virtualdisplay.data.ServerNode) {}
+    /** 建立到指定节点的连接 */
+    fun connectNode(node: com.ynk.virtualdisplay.data.ServerNode) {}
+    /** 断开指定节点的连接 */
+    fun disconnectNode(node: com.ynk.virtualdisplay.data.ServerNode, killDaemon: Boolean = false) {}
+    /** 获取指定节点的 [IDisplayRepository] 槽位 */
+    fun getSlot(nodeKey: String): IDisplayRepository? = null
+    /** 获取所有活跃的连接槽 */
+    fun allSlots(): Collection<IDisplayRepository> = emptyList()
 }
 
 /**

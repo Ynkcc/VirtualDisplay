@@ -60,20 +60,6 @@ class DisplayMetricsManager(private val context: Context) {
         return displayManager.displays.filter { it.displayId != Display.DEFAULT_DISPLAY }
     }
 
-    /**
-     * 注册显示器变化监听器。
-     */
-    fun registerDisplayListener(listener: DisplayManager.DisplayListener) {
-        displayManager.registerDisplayListener(listener, null)
-    }
-
-    /**
-     * 注销显示器变化监听器。
-     */
-    fun unregisterDisplayListener(listener: DisplayManager.DisplayListener) {
-        displayManager.unregisterDisplayListener(listener)
-    }
-
     private fun resolveDisplaySpec(display: Display): DisplaySpec {
         val size = Point()
         val metrics = DisplayMetrics()

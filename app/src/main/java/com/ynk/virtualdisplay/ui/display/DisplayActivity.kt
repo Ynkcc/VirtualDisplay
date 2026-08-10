@@ -45,14 +45,16 @@ class DisplayActivity : ComponentActivity() {
     companion object {
         private const val TAG = "DisplayActivity"
 
-        fun createIntent(context: Context, displayId: Int): Intent {
+        fun createIntent(context: Context, displayId: Int, nodeKey: String? = null): Intent {
             return Intent(context, DisplayActivity::class.java).apply {
                 putExtra("display_id", displayId)
+                putExtra("node_key", nodeKey)
             }
         }
     }
 
     private var remoteDisplayId: Int? = null
+    private var nodeKey: String? = null
     private var videoWidth = 0
     private var videoHeight = 0
     private var currentVideoRotation = 0
@@ -65,6 +67,8 @@ class DisplayActivity : ComponentActivity() {
     @Volatile private var pendingSurface: Surface? = null
 
     private var resizeJob: Job? = null
+    private var remoteDisplayMonitorJob: Job? = null
+    private val isLocalNode: Boolean = AppSettings.getCurrentServerNodeSync().isLocal
 
     private lateinit var rootLayout: FrameLayout
     private lateinit var videoSurfaceView: VideoSurfaceView
@@ -72,8 +76,19 @@ class DisplayActivity : ComponentActivity() {
     private lateinit var controlPanel: DisplayControlPanel
     private lateinit var inputController: InputController
 
-    private val repository: IDisplayRepository by inject()
+    private val interactor: com.ynk.virtualdisplay.domain.DisplayInteractor by inject()
     private val displayMetricsManager: DisplayMetricsManager by inject()
+    
+    private val repository: IDisplayRepository by lazy {
+        val key = nodeKey
+        if (key != null) {
+            interactor.getSlot(key) ?: error("No slot found for node key $key")
+        } else {
+            // Fallback to active repository (legacy behavior or current node)
+            val activeRepoByInject: IDisplayRepository by inject()
+            activeRepoByInject
+        }
+    }
 
     private val displayListener = object : android.hardware.display.DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) {
@@ -101,6 +116,7 @@ class DisplayActivity : ComponentActivity() {
         val displayId = intent.getIntExtra("display_id", -1)
         require(displayId != -1) { "Invalid display_id" }
         remoteDisplayId = displayId
+        nodeKey = intent.getStringExtra("node_key")
 
         requestHighRefreshRate()
         enterFullscreen()
@@ -139,9 +155,12 @@ class DisplayActivity : ComponentActivity() {
             }
         }
 
-        val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
-        dm.registerDisplayListener(displayListener, null)
+        if (isLocalNode) {
+            val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
+            dm.registerDisplayListener(displayListener, null)
+        }
         updateDisplayInfo(displayId)
+        startDisconnectDetection(displayId)
 
         repository.setPerformanceStatsCallback { stats ->
             lifecycleScope.launch(Dispatchers.Main) {
@@ -164,8 +183,11 @@ class DisplayActivity : ComponentActivity() {
         repository.setPerformanceStatsCallback(null)
         repository.setVideoConfigCallback(null)
         resizeJob?.cancel()
-        val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
-        dm.unregisterDisplayListener(displayListener)
+        remoteDisplayMonitorJob?.cancel()
+        if (isLocalNode) {
+            val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
+            dm.unregisterDisplayListener(displayListener)
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -232,11 +254,11 @@ class DisplayActivity : ComponentActivity() {
                 override fun onSurfaceAvailable(surface: Surface) {
                     Log.i(TAG, "onSurfaceAvailable: surface=$surface valid=${surface.isValid} videoSize=${videoWidth}x${videoHeight}")
                     pendingSurface = surface
-                    if (videoWidth > 0 && videoHeight > 0) {
-                        setVideoSurface(surface)
-                    } else {
-                        Log.w(TAG, "onSurfaceAvailable: videoWidth/Height not yet known (display may not be registered), surface cached as pending")
-                    }
+                    // Regardless of whether videoWidth/Height are known, we MUST set the surface to the repository.
+                    // For remote displays, we might never find the display in the local DisplayManager.
+                    // Starting the stream allows the decoder to eventually report the correct dimensions.
+                    setVideoSurface(surface)
+                    pendingSurface = null
                 }
 
                 override fun onSurfaceDestroyed() {
@@ -336,48 +358,117 @@ class DisplayActivity : ComponentActivity() {
     }
 
     private fun updateDisplayInfo(displayId: Int) {
-        val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
-        dm.getDisplay(displayId)?.let { display ->
-            val spec = displayMetricsManager.getVirtualDisplaySpec(display)
-            val width = spec.width
-            val height = spec.height
-            val wasFirstDiscovery = (videoWidth == 0 && videoHeight == 0)
-            if (videoWidth != width || videoHeight != height) {
-                Log.i(TAG, "updateDisplayInfo: #$displayId size=${width}x${height} (prev=${videoWidth}x${videoHeight})")
-                videoWidth = width
-                videoHeight = height
-                inputController.updateVideoSize(width, height)
-                videoSurfaceView.setVideoSize(width, height)
-
-                // Retroactively feed the pending surface to the decoder if it
-                // arrived before display dimensions were known.
-                val ps = pendingSurface
-                if (ps != null && ps.isValid) {
-                    Log.i(TAG, "updateDisplayInfo: applying pending surface now that dimensions are known")
-                    pendingSurface = null
-                    setVideoSurface(ps)
+        lifecycleScope.launch(Dispatchers.IO) {
+            // 优先走 RPC：远程和本地节点统一从服务端获取显示尺寸
+            val infosResult = repository.getActiveDisplayInfos()
+            val displayInfo = infosResult.getOrNull()?.firstOrNull { it.displayId == displayId }
+            if (displayInfo != null) {
+                val isFirstDiscovery = (videoWidth == 0 && videoHeight == 0)
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    Log.i(TAG, "updateDisplayInfo: RPC display #$displayId size=${displayInfo.width}x${displayInfo.height}")
+                    applyDisplayDimensions(displayInfo.width, displayInfo.height, displayInfo.dpi, isFirstDiscovery)
                 }
+                return@launch
+            }
 
-                // Only send a resize command to the daemon when the display
-                // dimensions *changed* from a previously known value. On first
-                // discovery (wasFirstDiscovery), the display was just created
-                // with the correct dimensions by createDisplay — sending a
-                // redundant resize causes the server to restart its
-                // SurfaceEncoder, which closes the video socket and kills the
-                // decoder stream.
-                if (!wasFirstDiscovery) {
-                    val dpi = spec.dpi
-                    resizeJob?.cancel()
-                    resizeJob = lifecycleScope.launch {
-                        kotlinx.coroutines.delay(250)
-                        repository.resizeDisplay(displayId, width, height, dpi)
+            // 回退路径：本机节点本地 DisplayManager 直接查
+            if (isLocalNode) {
+                val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
+                val display = dm.getDisplay(displayId)
+                if (display != null) {
+                    val spec = displayMetricsManager.getVirtualDisplaySpec(display)
+                    val isFirstDiscovery = (videoWidth == 0 && videoHeight == 0)
+                    kotlinx.coroutines.withContext(Dispatchers.Main) {
+                        applyDisplayDimensions(spec.width, spec.height, spec.dpi, isFirstDiscovery)
                     }
-                } else {
-                    Log.i(TAG, "updateDisplayInfo: first discovery, skipping resize (display already created with correct dimensions)")
+                    return@launch
                 }
             }
-        } ?: run {
-            Log.w(TAG, "updateDisplayInfo: Display #$displayId not found in system DisplayManager yet")
+
+            // 最后回退：从 AppSettings 读缓存（所有节点通用）
+            val node = AppSettings.getCurrentServerNodeSync()
+            val saved = AppSettings.getDisplaysForServer(this@DisplayActivity, node).find { it.id == displayId }
+            if (saved != null) {
+                val isFirstDiscovery = (videoWidth == 0 && videoHeight == 0)
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    Log.i(TAG, "updateDisplayInfo: found saved display #$displayId size=${saved.width}x${saved.height}")
+                    applyDisplayDimensions(saved.width, saved.height, saved.dpi, isFirstDiscovery)
+                }
+            } else {
+                Log.w(TAG, "updateDisplayInfo: Display #$displayId not found via RPC, local DM, or saved cache")
+            }
+        }
+    }
+
+    /**
+     * 统一的"显示器存活检测"：
+     * - 对所有节点：监听 connectionStatus，当连接断开（DISCONNECTED/ERROR）时立即 finish()
+     * - 对远程节点额外：每 15s RPC 轮询服务端显示器列表，检测 displayId 是否被销毁
+     *   （远程 DisplayManager.DisplayListener 收不到本地系统回调，需要 RPC 替代）
+     */
+    private fun startDisconnectDetection(displayId: Int) {
+        // 1. 即时路径：监听连接状态变化
+        lifecycleScope.launch {
+            repository.connectionStatus.collect { status ->
+                if (status == com.ynk.virtualdisplay.data.repository.ConnectionStatus.DISCONNECTED ||
+                    status == com.ynk.virtualdisplay.data.repository.ConnectionStatus.ERROR
+                ) {
+                    Log.w(TAG, "Connection status=$status, finishing activity")
+                    finish()
+                }
+            }
+        }
+
+        // 2. 远程节点兜底：15s RPC 轮询服务端显示器列表
+        if (!isLocalNode) {
+            remoteDisplayMonitorJob = lifecycleScope.launch(Dispatchers.IO) {
+                while (!isFinishing) {
+                    kotlinx.coroutines.delay(15_000)
+                    if (isFinishing) break
+                    val result = repository.getActiveDisplayInfos()
+                    val stillExists = result.getOrNull()?.any { it.displayId == displayId } ?: true
+                    if (!stillExists) {
+                        Log.w(TAG, "Remote display #$displayId no longer active on server, finishing activity")
+                        kotlinx.coroutines.withContext(Dispatchers.Main) { finish() }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun applyDisplayDimensions(width: Int, height: Int, dpi: Int, isFirstDiscovery: Boolean) {
+        if (videoWidth != width || videoHeight != height) {
+            Log.i(TAG, "applyDisplayDimensions: #$remoteDisplayId size=${width}x${height} (prev=${videoWidth}x${videoHeight})")
+            videoWidth = width
+            videoHeight = height
+            inputController.updateVideoSize(width, height)
+            videoSurfaceView.setVideoSize(width, height)
+
+            // Retroactively feed the pending surface to the decoder if it
+            // arrived before display dimensions were known.
+            val ps = pendingSurface
+            if (ps != null && ps.isValid) {
+                Log.i(TAG, "applyDisplayDimensions: applying pending surface now that dimensions are known")
+                pendingSurface = null
+                setVideoSurface(ps)
+            }
+
+            // Only send a resize command to the daemon when the display
+            // dimensions *changed* from a previously known value. On first
+            // discovery (isFirstDiscovery), the display was just created
+            // with the correct dimensions by createDisplay — sending a
+            // redundant resize causes the server to restart its
+            // SurfaceEncoder, which closes the video socket and kills the
+            // decoder stream.
+            if (!isFirstDiscovery) {
+                resizeJob?.cancel()
+                resizeJob = lifecycleScope.launch {
+                    kotlinx.coroutines.delay(250)
+                    repository.resizeDisplay(remoteDisplayId!!, width, height, dpi)
+                }
+            } else {
+                Log.i(TAG, "applyDisplayDimensions: first discovery, skipping resize (display already created with correct dimensions)")
+            }
         }
     }
 
@@ -476,40 +567,52 @@ class DisplayActivity : ComponentActivity() {
     }
 
     private fun showAppSelectionDialog() {
-        val pm = packageManager
         lifecycleScope.launch(Dispatchers.IO) {
             val recentPkgs = RecentAppHelper.getRecentApps(this@DisplayActivity)
-            val installedApps = pm.getInstalledApplications(android.content.pm.PackageManager.GET_META_DATA)
-            val allApps = installedApps
-                .filter { info ->
-                    (info.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM == 0) ||
-                        (pm.getLaunchIntentForPackage(info.packageName) != null)
+            val appsResult = repository.listApps()
+            appsResult.onSuccess { apps ->
+                val allApps = apps.map { AppInfo(it.name, it.packageName) }
+
+                val recentList = mutableListOf<AppInfo>()
+                recentPkgs.forEach { pkg ->
+                    val app = allApps.find { it.packageName == pkg }
+                    if (app != null) recentList.add(app)
                 }
-                .map { info -> AppInfo(info.loadLabel(pm).toString(), info.packageName) }
+                val otherList = allApps.filter { it.packageName !in recentPkgs }.sortedBy { it.name }
+                val sortedAppList = recentList + otherList
 
-            val recentList = mutableListOf<AppInfo>()
-            recentPkgs.forEach { pkg ->
-                val app = allApps.find { it.packageName == pkg }
-                if (app != null) recentList.add(app)
-            }
-            val otherList = allApps.filter { it.packageName !in recentPkgs }.sortedBy { it.name }
-            val sortedAppList = recentList + otherList
-
-            kotlinx.coroutines.withContext(Dispatchers.Main) {
-                val names = sortedAppList.map { app ->
-                    if (app.packageName in recentPkgs) "${app.name} (最近)" else app.name
-                }.toTypedArray()
-                android.app.AlertDialog.Builder(this@DisplayActivity)
-                    .setTitle("选择要在该屏幕启动的应用")
-                    .setItems(names) { _, which ->
-                        val selectedApp = sortedAppList[which]
-                        val id = remoteDisplayId ?: return@setItems
-                        lifecycleScope.launch {
-                            repository.launchApp(selectedApp.packageName, id)
-                        }
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    if (sortedAppList.isEmpty()) {
+                        android.app.AlertDialog.Builder(this@DisplayActivity)
+                            .setTitle("选择应用")
+                            .setMessage("无法从服务端获取应用列表")
+                            .setNegativeButton("取消", null)
+                            .show()
+                        return@withContext
                     }
-                    .setNegativeButton("取消", null)
-                    .show()
+                    val names = sortedAppList.map { app ->
+                        if (app.packageName in recentPkgs) "${app.name} (最近)" else app.name
+                    }.toTypedArray()
+                    android.app.AlertDialog.Builder(this@DisplayActivity)
+                        .setTitle("选择要在该屏幕启动的应用")
+                        .setItems(names) { _, which ->
+                            val selectedApp = sortedAppList[which]
+                            val id = remoteDisplayId ?: return@setItems
+                            lifecycleScope.launch {
+                                repository.launchApp(selectedApp.packageName, id)
+                            }
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
+            }.onFailure { e ->
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    android.app.AlertDialog.Builder(this@DisplayActivity)
+                        .setTitle("选择应用")
+                        .setMessage("加载应用列表失败: ${e.message}")
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
             }
         }
     }

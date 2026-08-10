@@ -30,27 +30,19 @@ class VideoStreamController(
     suspend fun start(displayId: Int, surface: Surface?, w: Int, h: Int): Result<Unit> = mutex.withLock {
         Log.i(TAG, "Starting video stream for display $displayId... (surface=$surface valid=${surface?.isValid} dims=${w}x${h})")
 
-        // 1. 如果已有正在运行的本地解码器，先将其彻底关闭并清理
-        val decoderExisted = decoder != null
-        if (decoderExisted) {
+        // 1. 先关闭残留 Scrcpy 子通道 (视频 + 控制)：关闭旧 video socket 会使 decoder
+        //    input worker 阻塞的 read() 抛 SocketException 退出，从而下面的
+        //    decoder.stop() 的 join(500) 快速返回而非超时（旧 worker 仍持旧 codec
+        //    DirectByteBuffer 引用，rebuildCodec release 后会 use-after-free）。
+        //    disconnectScrcpyChannels 对首启/重启均幂等，统一此路径无需分支。
+        //    b7aef962 之后服务端在 video socket 关闭时自动停止编码器、释放 VD 引用。
+        transport.disconnectScrcpyChannels()
+
+        // 2. 关闭旧解码器（socket 已断，input worker 已解除阻塞，join 不会超时）
+        if (decoder != null) {
             decoder?.stop()
             decoder = null
             tracker = null
-        }
-
-        // 2. 物理断开之前残留的 Scrcpy 子通道 (视频 + 控制) 以保干净
-        //    注意：b7aef962 之后 TYPE_STOP_VIDEO_STREAM (210) 已不再发，
-        //    服务端在 video socket 关闭时自动停止编码器、释放 VD 引用。
-        //    但 reconnectVideoSocket() 必须在 decoder.stop() 之前执行：
-        //    关闭旧 video socket 会使 decoder input worker 的 read() 抛
-        //    SocketException 退出，这样 stop() 里的 join 就不会超时 500ms
-        //    （旧 worker 仍持有旧 codec DirectByteBuffer 引用会在 rebuildCodec
-        //    触发 release 后导致 use-after-free native crash）。
-        if (decoderExisted) {
-            transport.reconnectVideoSocket()
-        } else {
-            // 首次 start，先断开残留
-            transport.disconnectScrcpyChannels()
         }
 
         // 3. (start 阶段) 不再发送 TYPE_START_VIDEO_STREAM (209) —— 新协议下
@@ -112,33 +104,24 @@ class VideoStreamController(
         Result.success(Unit)
     }
 
-    suspend fun stop(force: Boolean = false) = mutex.withLock {
-        stopInternal(force)
+    suspend fun stop() = mutex.withLock {
+        stopInternal()
     }
 
-    private suspend fun stopInternal(force: Boolean = false) {
+    private suspend fun stopInternal() {
         Log.i(TAG, "Stopping video stream...")
-        if (!force) {
-            // Post-b7aef962: stopVideoStream (210) removed. Video server stops
-            // automatically when the ROLE_VIDEO socket closes. We proactively reconnect
-            // the video socket so the input worker read() unblocks via SocketException
-            // BEFORE the decoder.stop() joins on the worker thread — otherwise join(500)
-            // times out and rebuildCodec (triggered by resizeDisplay /
-            // updateResolution on the main thread) releases the old codec while
-            // the worker still holds DirectByteBuffer refs, causing a native
-            // Data Abort (use-after-free).
-            val reconnectResult = runCatching { transport.reconnectVideoSocket() }
-            if (reconnectResult.isFailure) {
-                Log.w(TAG, "reconnectVideoSocket failed in stopInternal (proceeding with decoder stop)", reconnectResult.exceptionOrNull())
-            }
-        }
+        // Post-b7aef962: stopVideoStream (210) removed. Video server stops
+        // automatically when the ROLE_VIDEO socket closes. 先断开 Scrcpy 子信道使
+        // input worker 阻塞的 read() 抛 SocketException 退出，从而下面的
+        // decoder.stop() 的 join(500) 快速返回而非超时（否则 rebuildCodec 由
+        // resizeDisplay/updateResolution 在主线程触发时会 release 旧 codec，而
+        // worker 仍持 DirectByteBuffer 引用 → native Data Abort use-after-free）。
+        transport.disconnectScrcpyChannels()
 
         decoder?.stop()
         decoder = null
         tracker = null
 
-        // 物理断开 Scrcpy 控制与视频子信道，保持协商通道依然活跃
-        transport.disconnectScrcpyChannels()
         Log.i(TAG, "VideoStreamController stopped")
     }
 

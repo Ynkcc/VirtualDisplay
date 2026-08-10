@@ -7,6 +7,7 @@ object DeviceMessageCodec {
     const val TYPE_RESPONSE_GENERIC: Byte = 100
     const val TYPE_RESPONSE_ACTIVE_DISPLAYS: Byte = 101
     const val TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS: Byte = 102
+    const val TYPE_RESPONSE_APPS_LIST: Byte = 103
 
     fun read(input: DataInputStream): DeviceMessage {
         val type = input.readByte()
@@ -14,6 +15,7 @@ object DeviceMessageCodec {
             TYPE_RESPONSE_GENERIC -> readGenericResponse(input)
             TYPE_RESPONSE_ACTIVE_DISPLAYS -> readActiveDisplaysResponse(input)
             TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS -> readActiveDisplayInfosResponse(input)
+            TYPE_RESPONSE_APPS_LIST -> readAppsListResponse(input)
             else -> throw IllegalArgumentException("Unknown device message type: $type")
         }
     }
@@ -58,5 +60,24 @@ object DeviceMessageCodec {
             displays.add(DeviceMessage.DisplayInfoEntry(displayId, width, height, dpi, rotation, mirrorDisplayId, isOwned))
         }
         return DeviceMessage.ActiveDisplayInfosResponse(sequence, displays)
+    }
+
+    private fun readAppsListResponse(input: DataInputStream): DeviceMessage.AppsListResponse {
+        val sequence = input.readLong()
+        val count = input.readInt()
+        val apps = ArrayList<DeviceMessage.AppEntry>(count)
+        for (i in 0 until count) {
+            val pkgLen = input.readInt()
+            val pkgBytes = ByteArray(pkgLen)
+            input.readFully(pkgBytes)
+            val pkgName = String(pkgBytes, StandardCharsets.UTF_8)
+            val nameLen = input.readInt()
+            val nameBytes = ByteArray(nameLen)
+            input.readFully(nameBytes)
+            val name = if (nameLen > 0) String(nameBytes, StandardCharsets.UTF_8) else pkgName
+            val isSystem = input.readByte().toInt() != 0
+            apps.add(DeviceMessage.AppEntry(pkgName, name, isSystem))
+        }
+        return DeviceMessage.AppsListResponse(sequence, apps)
     }
 }

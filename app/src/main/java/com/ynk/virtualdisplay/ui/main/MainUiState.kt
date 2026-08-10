@@ -26,6 +26,7 @@ enum class ScreenTab {
 data class MainUiState(
     val shizukuState: ShizukuState = ShizukuState.Checking,
     val connectionStatus: ConnectionStatus = ConnectionStatus.IDLE,
+    val connectionError: String? = null,
     val displays: List<DisplayInfoModel> = emptyList(),
     val orphanDisplayIds: List<Int> = emptyList(),
     val statusMessage: String = "Ready",

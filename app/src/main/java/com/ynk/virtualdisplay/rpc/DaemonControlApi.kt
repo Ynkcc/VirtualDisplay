@@ -16,6 +16,8 @@ interface DaemonControlApi {
     suspend fun releaseDisplay(displayId: Int): Result<Unit>
     suspend fun resizeDisplay(displayId: Int, w: Int, h: Int, dpi: Int): Result<Unit>
     suspend fun startActivity(packageName: String, displayId: Int): Result<Int>
+    suspend fun launchHome(displayId: Int): Result<Int>
+    suspend fun listApps(): Result<List<DeviceMessage.AppEntry>>
     suspend fun getActiveDisplayIds(): Result<IntArray>
     suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>>
     /**
@@ -99,6 +101,31 @@ class DaemonControlApiImpl(
             } else {
                 Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
             }
+        } else {
+            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+        }
+    }
+
+    override suspend fun launchHome(displayId: Int): Result<Int> {
+        val msg = ControlMessage.LaunchHome(displayId)
+        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
+        return if (resp is DeviceMessage.GenericResponse) {
+            if (resp.statusCode == 0) Result.success(resp.displayId)
+            else Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
+        } else {
+            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+        }
+    }
+
+    override suspend fun listApps(): Result<List<DeviceMessage.AppEntry>> {
+        val msg = ControlMessage.ListApps
+        // AppLister.listInstalledApps() on a device with hundreds of apps
+        // can take several seconds (per-app PackageManager binder calls).
+        // Give it 15s instead of the default 5s so the client doesn't
+        // timeout spuriously on slow devices.
+        val resp = rpc.sendAndAwait(msg, timeoutMs = 15_000) ?: return Result.failure(IOException("Connection error or timeout"))
+        return if (resp is DeviceMessage.AppsListResponse) {
+            Result.success(resp.apps)
         } else {
             Result.failure(IllegalStateException("Unexpected response type: $resp"))
         }

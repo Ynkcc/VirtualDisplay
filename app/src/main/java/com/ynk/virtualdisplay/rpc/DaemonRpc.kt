@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -74,6 +75,12 @@ class DaemonRpc(
                     try {
                         val message = DeviceMessageCodec.read(reader)
                         handleMessage(message)
+                    } catch (e: SocketTimeoutException) {
+                        // SO_TIMEOUT on the negotiation socket fired. This is
+                        // expected for idle long-lived connections — the server
+                        // may go minutes without sending a message. Keep the
+                        // loop alive; the next read() will block again.
+                        continue
                     } catch (e: IOException) {
                         if (messageLoopRunning && !explicitStop) {
                             Log.e(TAG, "IOException in message loop", e)
@@ -131,6 +138,7 @@ class DaemonRpc(
             is DeviceMessage.GenericResponse -> message.sequence
             is DeviceMessage.ActiveDisplaysResponse -> message.sequence
             is DeviceMessage.ActiveDisplayInfosResponse -> message.sequence
+            is DeviceMessage.AppsListResponse -> message.sequence
         }
 
         val matched = if (sequence != 0L) {

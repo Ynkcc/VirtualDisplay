@@ -41,4 +41,17 @@ sealed class DeviceMessage {
         val sequence: Long,
         val displays: List<DisplayInfoEntry>
     ) : DeviceMessage()
+
+    /** Per-app entry for [AppsListResponse]. */
+    data class AppEntry(
+        val packageName: String,
+        val name: String,
+        val isSystem: Boolean
+    )
+
+    /** Response to [ControlMessage.ListApps] (TYPE 103). */
+    data class AppsListResponse(
+        val sequence: Long,
+        val apps: List<AppEntry>
+    ) : DeviceMessage()
 }

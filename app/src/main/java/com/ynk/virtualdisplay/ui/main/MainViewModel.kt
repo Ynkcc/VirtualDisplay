@@ -73,6 +73,7 @@ class MainViewModel(
         // 订阅连接错误
         viewModelScope.launch {
             interactor.connectionError.collect { error ->
+                _uiState.update { it.copy(connectionError = error) }
                 if (error != null) {
                     _uiState.update { it.copy(statusMessage = "连接错误: $error") }
                 }
@@ -107,6 +108,7 @@ class MainViewModel(
         viewModelScope.launch {
             AppSettings.currentServerNodeCache.collect { node ->
                 _uiState.update { it.copy(currentServerNode = node) }
+                interactor.setActiveNode(node) // Sync active node in repository
                 reloadDefaultInputsFromSettings(force = true)
                 refreshDisplaysInternal()
             }
@@ -178,8 +180,7 @@ class MainViewModel(
     private fun selectServerNode(node: com.ynk.virtualdisplay.data.ServerNode) {
         viewModelScope.launch {
             AppSettings.setCurrentServerNode(appContext, node)
-            interactor.unbindService()
-            kotlinx.coroutines.delay(300)
+            interactor.setActiveNode(node)
             checkPrivilegeAndBind()
         }
     }
@@ -369,6 +370,14 @@ class MainViewModel(
                     _uiState.update { it.copy(isLoading = false, statusMessage = "Launch failed: ${e.message}") }
                 }
         }
+    }
+
+    suspend fun launchHome(displayId: Int): Result<Int> {
+        return interactor.launchHome(displayId)
+    }
+
+    suspend fun listApps(): Result<List<com.ynk.virtualdisplay.protocol.DeviceMessage.AppEntry>> {
+        return interactor.listApps()
     }
 
     // === 重启服务 ===

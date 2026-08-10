@@ -8,6 +8,7 @@ import com.ynk.virtualdisplay.protocol.SequenceGenerator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
@@ -18,6 +19,14 @@ import java.net.Socket
 class DaemonTransport {
     companion object {
         private const val TAG = "DaemonTransport"
+        // Connect timeout (ms) for Socket.connect(). Applies to initial
+        // negotiation socket + per-display control/video role sockets.
+        private const val CONNECT_TIMEOUT_MS = 1000
+        // Socket read timeout (ms) for socket input streams. Protects the
+        // negotiation message loop, CONFIGURE_SESSION synchronous read,
+        // and per-role socket reads from blocking forever on half-open
+        // connections.
+        private const val SOCKET_READ_TIMEOUT_MS = 30_000
         // StartDaemon already polls the TCP port to readiness, so the first attempt
         // normally succeeds. The retry loop only kicks in for the rare race where the
         // daemon dies between probe and connect; a smaller base delay recovers faster
@@ -38,19 +47,12 @@ class DaemonTransport {
     @Volatile internal var controlIn: DataInputStream? = null
     @Volatile internal var controlOut: DataOutputStream? = null
 
-    // Stored during connect() so reconnectVideoSocket() can open a fresh socket
-    // without re-handshaking the control channel.
+    // Stored during connect() so connectScrcpyChannels() can open fresh role
+    // sockets without re-handshaking the negotiation channel.
     @Volatile private var host: String = ""
     @Volatile private var port: Int = 0
     // daemon_secret_token 认证。null 表示不发送认证。
     @Volatile private var secretToken: String? = null
-
-    // The displayId currently routed through ROLE_VIDEO socket. b7aef962 引入
-    // role socket 携带 displayId 路由：每个 role socket 必须发送 sessionId
-    // 之后再发送 4B displayId，并读取服务端返回的 4B displayId ack。
-    // App 当前只推一路流，此处缓存该 displayId 给 reconnectVideoSocket()
-    // 和 stop→start 重连流程使用。
-    @Volatile var streamingDisplayId: Int = 0
 
     @Volatile
     var session: DaemonSession? = null
@@ -85,54 +87,6 @@ class DaemonTransport {
     }
 
     /**
-     * Close the current video socket and open a fresh one bound to
-     * [streamingDisplayId]. Used after VideoStreamController stops the old
-     * stream to guarantee a clean byte stream (reconnectVideoSocket prevents
-     * a stale H264 parser worker from stealing the new stream's NALUs).
-     *
-     * b7aef962 requires every role socket transmit: ROLE(1B) + sessionId(4B BE)
-     * + displayId(4B BE) and then read a 4B displayId ack from the server.
-     * If the new socket's ack displayId mismatches, the operation fails
-     * (routing was rejected by the server because displayId was not declared
-     * or the session is not in CONFIGURED phase).
-     */
-    fun reconnectVideoSocket(): InputStream? {
-        // Close old video socket — this unblocks any reader stuck in input.read()
-        // on the old InputStream, causing it to throw SocketException and exit.
-        runCatching { videoSocket?.close() }
-        videoSocket = null
-
-        val currentSession = session ?: run {
-            Log.e(TAG, "reconnectVideoSocket: no active session")
-            return null
-        }
-
-        return try {
-            val displayId = streamingDisplayId
-            val video = Socket()
-            video.connect(InetSocketAddress(host, port), 1000)
-            videoSocket = video
-
-            val videoOut = video.getOutputStream()
-            DaemonHandshake.writeRole(videoOut, DaemonSocketRole.ROLE_VIDEO)
-            DaemonHandshake.writeSessionId(videoOut, currentSession.sessionId)
-            DaemonHandshake.writeDisplayId(videoOut, displayId)
-            val ack = DaemonHandshake.readInt32(video.inputStream)
-            if (ack != displayId) {
-                throw IOException("Video socket displayId ack mismatch: expected $displayId, server ack=$ack")
-            }
-
-            Log.i(TAG, "Video socket reconnected (session ${currentSession.sessionId}, displayId=$displayId, ack=$ack)")
-            video.inputStream
-        } catch (e: IOException) {
-            Log.e(TAG, "reconnectVideoSocket failed", e)
-            runCatching { videoSocket?.close() }
-            videoSocket = null
-            null
-        }
-    }
-
-    /**
      * Connect the scrcpy-native ROLE_CONTROL and ROLE_VIDEO sockets.
      *
      * @param displayId the displayId the video socket should route to (b7aef962)
@@ -143,7 +97,8 @@ class DaemonTransport {
             disconnectScrcpyChannels()
 
             val ctrl = Socket()
-            ctrl.connect(InetSocketAddress(host, port), 1000)
+            ctrl.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+            ctrl.soTimeout = SOCKET_READ_TIMEOUT_MS
             controlSocket = ctrl
 
             val ctrlOut = ctrl.getOutputStream()
@@ -160,7 +115,8 @@ class DaemonTransport {
             Log.i(TAG, "Scrcpy control channel connected (session ${currentSession.sessionId}, displayId=$displayId, ack=$ctrlAck)")
 
             val video = Socket()
-            video.connect(InetSocketAddress(host, port), 1000)
+            video.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+            video.soTimeout = SOCKET_READ_TIMEOUT_MS
             videoSocket = video
 
             val videoOut = video.getOutputStream()
@@ -172,7 +128,6 @@ class DaemonTransport {
                 throw IOException("Video socket displayId ack mismatch: expected $displayId, server ack=$videoAck")
             }
 
-            streamingDisplayId = displayId
             Log.i(TAG, "Video channel connected (session ${currentSession.sessionId}, displayId=$displayId, ack=$videoAck). Service auto-starts stream on bind.")
             true
         } catch (e: IOException) {
@@ -227,7 +182,8 @@ class DaemonTransport {
                 disconnectInternal()
 
                 val negotiation = Socket()
-                negotiation.connect(InetSocketAddress(host, port), 1000)
+                negotiation.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
+                negotiation.soTimeout = SOCKET_READ_TIMEOUT_MS
                 negotiationSocket = negotiation
 
                 // 1. Negotiation Socket 握手
@@ -276,7 +232,18 @@ class DaemonTransport {
                     // read-ahead and the deferred resolution would be missed).
                     // This mirrors the Python client's handshake: CONFIGURE_SESSION
                     // is part of connect(), not the runtime message flow.
-                    val msg = DeviceMessageCodec.read(negotiationIn!!)
+                    //
+                    // withTimeout protects against a server crash between sending
+                    // CONFIGURE_SESSION and receiving the echo reply — without it
+                    // DeviceMessageCodec.read() would block forever on the half-open
+                    // socket because SO_TIMEOUT is long enough (30s) to mask the hang.
+                    val msg = try {
+                        withTimeout(5_000) {
+                            DeviceMessageCodec.read(negotiationIn!!)
+                        }
+                    } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+                        throw IOException("CONFIGURE_SESSION response timed out after 5s (server may have crashed)")
+                    }
                     if (msg !is DeviceMessage.GenericResponse) {
                         throw IOException("CONFIGURE_SESSION responded with unexpected type: $msg")
                     }

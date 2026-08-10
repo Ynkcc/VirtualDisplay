@@ -82,6 +82,7 @@ fun VirtualDisplayScreen(
     // App Selection Dialog Handler
     showAppSelectionDialogForDisplayId?.let { displayId ->
         AppSelectionDialog(
+            loadApps = { viewModel.listApps() },
             onDismiss = { showAppSelectionDialogForDisplayId = null },
             onAppSelected = { appInfo ->
                 viewModel.launchSelectedApp(appInfo.packageName, displayId)
@@ -173,7 +174,7 @@ fun VirtualDisplayScreen(
                     }
                     ConnectionStatus.BINDING -> "正在绑定..." to Color(0xFFFFB74D)
                     ConnectionStatus.RECONNECTING -> "正在重连..." to Color(0xFFFFB74D)
-                    ConnectionStatus.DISCONNECTED -> "连接断开" to Color(0xFFEF5350)
+                    ConnectionStatus.DISCONNECTED -> (uiState.connectionError ?: "连接断开") to Color(0xFFEF5350)
                     ConnectionStatus.ERROR -> "错误" to Color(0xFFEF5350)
                     ConnectionStatus.IDLE -> "空闲" to Color(0xFF78909C)
                 }
@@ -379,9 +380,11 @@ fun VirtualDisplayScreen(
                             displayInfo = displayInfo,
                             isOrphan = displayInfo.id in orphanDisplayIds,
                             onPlay = {
-                                val intent = Intent(context, DisplayActivity::class.java).apply {
-                                    putExtra("display_id", displayInfo.id)
-                                }
+                                val intent = DisplayActivity.createIntent(
+                                    context, 
+                                    displayInfo.id, 
+                                    uiState.currentServerNode.uniqueKey()
+                                )
                                 context.startActivity(intent)
                             },
                             onDelete = { viewModel.handleIntent(MainIntent.ReleaseDisplay(displayInfo.id)) },
