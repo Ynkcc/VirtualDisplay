@@ -124,6 +124,23 @@ fun VirtualDisplayScreen(
                 )
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val isLocal = uiState.currentServerNode.host == "127.0.0.1" || uiState.currentServerNode.host == "localhost"
+                    val isLocalPrivileged = isLocal && uiState.privilegeMode != com.ynk.virtualdisplay.data.PrivilegeMode.NONE
+                    if (!isLocalPrivileged) {
+                        val isBinding = uiState.connectionStatus == com.ynk.virtualdisplay.data.repository.ConnectionStatus.BINDING
+                        TextButton(
+                            onClick = { viewModel.handleIntent(MainIntent.Reconnect) },
+                            enabled = !isBinding,
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Text(
+                                text = if (isBinding) "连接中…" else "重连",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                     IconButton(
                         onClick = { viewModel.handleIntent(MainIntent.RefreshDisplays) },
                         modifier = Modifier

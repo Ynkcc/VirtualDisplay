@@ -75,6 +75,8 @@ sealed class MainIntent {
     data object BindService : MainIntent()
     /** 解绑服务 */
     data object UnbindService : MainIntent()
+    /** 重连（unbind + bind，防重入） */
+    data object Reconnect : MainIntent()
 
     // 外部服务端及特权切换 Intent
     data class SelectServerNode(val node: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()

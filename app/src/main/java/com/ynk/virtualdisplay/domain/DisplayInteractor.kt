@@ -68,6 +68,19 @@ class DisplayInteractor(
     }
 
     /**
+     * 重连：先 unbind 清理旧连接，再 bind 建立新连接。
+     * 当 connectionStatus == BINDING 时忽略，防止重复触发。
+     */
+    fun reconnect() {
+        if (repository.connectionStatus.value == ConnectionStatus.BINDING) {
+            Log.d(TAG, "reconnect: already binding, skip")
+            return
+        }
+        repository.unbindService()
+        repository.bindService()
+    }
+
+    /**
      * 切换活跃节点。
      */
     fun setActiveNode(node: com.ynk.virtualdisplay.data.ServerNode) {

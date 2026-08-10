@@ -22,4 +22,11 @@ object NetUtils {
             else -> "网络错误: ${t.localizedMessage ?: "未知异常"}"
         }
     }
+
+    /**
+     * 如果为 0.0.0.0 返回本地环路地址，否则返回实际ip
+     */
+    fun resolveConnectHost(host: String): String {
+        return if (host == ANY_HOST) LOCAL_HOST else host
+    }
 }

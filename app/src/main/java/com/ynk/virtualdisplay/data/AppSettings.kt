@@ -429,22 +429,16 @@ object AppSettings {
 
     suspend fun getServerNodes(context: Context): List<ServerNode> {
         val prefs = context.applicationContext.dataStore.data.first()
-        val host = prefs[serverHostKey] ?: NetUtils.LOCAL_HOST
-        val port = prefs[serverPortKey] ?: 27183
-        val pwd = prefs[serverPasswordKey] ?: ""
-
         val raw = prefs[serverNodesKey] ?: ""
         val list = if (raw.isEmpty()) {
-            mutableListOf(ServerNode("本机", host, port, pwd))
+            mutableListOf(ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""))
         } else {
             raw.split(",").mapNotNull { ServerNode.fromSerializedString(it) }.toMutableList()
         }
 
         val localIdx = list.indexOfFirst { it.name == "本机" }
-        if (localIdx >= 0) {
-            list[localIdx] = list[localIdx].copy(host = host, port = port, password = pwd)
-        } else {
-            list.add(0, ServerNode("本机", host, port, pwd))
+        if (localIdx < 0) {
+            list.add(0, ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""))
         }
         return list
     }

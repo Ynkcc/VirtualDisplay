@@ -232,21 +232,7 @@ class DaemonDisplayRepository(
 
         scope.launch {
             val currentNode = AppSettings.getCurrentServerNodeSync()
-            val (host, port, password) = if (currentNode.name == "本机") {
-                Triple(
-                    settingsDataSource.getServerHost(),
-                    settingsDataSource.getServerPort(),
-                    settingsDataSource.getServerPassword()
-                )
-            } else {
-                Triple(
-                    currentNode.host,
-                    currentNode.port,
-                    currentNode.password
-                )
-            }
-
-            connectInternal(currentNode.name == "本机", host, port, password)
+            connectInternal(currentNode.name == "本机", currentNode.host, currentNode.port, currentNode.password)
         }
     }
 
@@ -295,7 +281,7 @@ class DaemonDisplayRepository(
 
             // Post-b7aef962: transport.connect performs the full 2-stage handshake
             // 建立实际连接服务端前，检查ip为0.0.0.0替换为127.0.0.1，中间一律使用传递的ip即便是0.0.0.0
-            val connectHost = if (host == NetUtils.ANY_HOST) NetUtils.LOCAL_HOST else host
+            val connectHost = NetUtils.resolveConnectHost(host)
             val connected = try {
                 transport.connect(connectHost, port, 5000, secretToken = password?.takeIf { it.isNotEmpty() })
             } catch (t: Throwable) {
@@ -557,51 +543,32 @@ class DaemonDisplayRepository(
     }
 
     override suspend fun startDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
-        // 已处于连接状态，不打断现有连接
-        if (_connectionStatus.value == ConnectionStatus.CONNECTED) {
-            Log.d(TAG, "startDaemon: already connected, skipping")
-            return@withContext Result.success(Unit)
-        }
-        // 先完整停止（若当前已绑定但未连接）
-        if (isBound) {
-            val job = withContext(Dispatchers.Main) {
-                isBound = false
-                launchCleanupOnce(killDaemon = false)
-            }
-            withTimeoutOrNull(1000) { job.join() }
+        val host = settingsDataSource.getServerHost()
+        val port = settingsDataSource.getServerPort()
+        val password = settingsDataSource.getServerPassword()
+
+        val privilegeMode = AppSettings.getPrivilegeModeSync()
+        if (privilegeMode == PrivilegeMode.NONE) {
+            return@withContext Result.failure(IllegalStateException("当前启动模式为“无权限”，无法拉起本地服务端"))
         }
 
-        val currentNode = AppSettings.getCurrentServerNodeSync()
-        val (host, port, password) = if (currentNode.name == "本机") {
-            Triple(
-                settingsDataSource.getServerHost(),
-                settingsDataSource.getServerPort(),
-                settingsDataSource.getServerPassword()
-            )
+        if (privilegeMode == PrivilegeMode.SHIZUKU && !shizukuManager.isAvailable()) {
+            return@withContext Result.failure(IllegalStateException("Shizuku 不可用"))
+        }
+
+        val started = processDataSource.startDaemon(port, host, password)
+        if (started) {
+            _daemonPid.value = processDataSource.getDaemonPid()
+            Result.success(Unit)
         } else {
-            Triple(
-                currentNode.host,
-                currentNode.port,
-                currentNode.password
-            )
-        }
-
-        withContext(Dispatchers.Main) {
-            isBound = true
-            connectInternal(currentNode.name == "本机", host, port, password)
+            Result.failure(IllegalStateException("启动服务端进程失败"))
         }
     }
 
     override suspend fun stopDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            // launchCleanupOnce(killDaemon=true) 会依次：取消重连、停止视频流、
-            // 发送 exitDaemon 命令、断开 transport、杀守护进程、重置状态
-            val job = withContext(Dispatchers.Main) {
-                isBound = false
-                launchCleanupOnce(killDaemon = true)
-            }
-            withTimeoutOrNull(3000) { job.join() }
-        }.map { }
+        processDataSource.stopDaemon()
+        _daemonPid.value = -1
+        Result.success(Unit)
     }
 
     override fun setVideoConfigCallback(callback: ((width: Int, height: Int) -> Unit)?) {

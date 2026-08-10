@@ -134,6 +134,7 @@ class MainViewModel(
             is MainIntent.UpdateInputs -> updateInputs(intent.width, intent.height, intent.dpi)
             is MainIntent.BindService -> interactor.bindService()
             is MainIntent.UnbindService -> interactor.unbindService()
+            is MainIntent.Reconnect -> interactor.reconnect()
             
             is MainIntent.SelectServerNode -> selectServerNode(intent.node)
             is MainIntent.AddServerNode -> addServerNode(intent.node)
