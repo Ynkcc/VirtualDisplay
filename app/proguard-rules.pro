@@ -5,6 +5,15 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
+# Shizuku
+-keep class dev.rikka.shizuku.** { *; }
+
+# Koin
+-keep class io.insertkoin.** { *; }
+
+# Keep Compose/Material icons if needed, though R8 usually handles this.
+# But since we commented out the extended icons, we should be fine.
+
 # If your project uses WebView with JS, uncomment the following
 # and specify the fully qualified class name to the JavaScript interface
 # class:

@@ -23,6 +23,7 @@ android {
         applicationId = "com.ynk.virtualdisplay"
         minSdk = 29
         targetSdk = 36
+        resConfigs("zh", "en")
 
         // 自动计算版本号与获取构建信息
         val commitCount = providers.exec {
@@ -84,7 +85,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             if (signingConfigs.findByName("release") != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -130,6 +132,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.material.icons.extended)
     debugImplementation(libs.androidx.compose.ui.tooling)
     implementation(libs.shizuku.api)
