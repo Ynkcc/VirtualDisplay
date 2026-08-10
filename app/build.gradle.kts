@@ -43,7 +43,7 @@ android {
         }.format(Date())
 
         versionCode = commitCount
-        versionName = "1.0.$commitCount"
+        versionName = "1.1.$commitCount"
 
         buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
         buildConfigField("Boolean", "GIT_DIRTY", "$isDirty")

@@ -15,7 +15,7 @@
 
 ## 快速上手
 
-1. **启动服务**：确认 Shizuku 服务已启动，打开“屏幕分身”应用。
+1. **启动服务**：确认 Shizuku 服务已启动(现已支持root拉起)，打开“屏幕分身”应用。
 2. **新建屏幕**：输入您想要的宽度、高度和 DPI（例如 1080, 2400, 440），点击创建。
 3. **管理与使用**：
    - **Play**：打开预览窗口，支持触摸操作。
@@ -24,12 +24,13 @@
 
 ## 常见问题
 
-- **预览画面显示异常？**
-  如果画面方向、比例或缩放不正确，可以尝试刷新显示或重新创建虚拟屏幕。
-
 - **创建屏幕时出现 `packageName must match the calling uid`？**
   请确保以 **adb / shell 身份**激活 Shizuku，而非以 Root 身份激活。
   部分设备的 [`DisplayManagerService`](https://github.com/cn00/android/blob/master/services/core/java/com/android/server/display/DisplayManagerService.java#L1532) 会校验调用者的 UID 与 packageName 是否匹配；而scrcpy 通过将 `PACKAGE_NAME` 固定为 `"com.android.shell"`，以 Root 身份运行时 会导致二者不匹配从而抛出 `SecurityException`。（ 本项目暂未对此进行修复。）
+
+- **其他问题 **
+  有其他问题或建议，欢迎在 [GitHub 仓库](https://github.com/Ynkcc/VirtualDisplay/issues) 提交问题。
+  消极维护，有能力的话建议自行处理。
 
 ## 致谢
 
