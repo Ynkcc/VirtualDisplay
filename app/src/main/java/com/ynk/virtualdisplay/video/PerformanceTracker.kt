@@ -123,4 +123,17 @@ class PerformanceTracker {
             onPerformanceStats?.invoke(getStatsString())
         }
     }
+
+    /**
+     * Periodic stats push for the case where frames are received but NOT rendered
+     * (e.g. dummy surface, codec error, or render scheduler stalled). Without this,
+     * the stats overlay stays blank during a black-screen episode, giving the user
+     * no diagnostic signal.
+     */
+    fun pushStatsIfStale() {
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - (renderWindowStartMs.takeIf { it > 0 } ?: nowMs) >= 1000) {
+            onPerformanceStats?.invoke(getStatsString())
+        }
+    }
 }

@@ -78,7 +78,7 @@ class DaemonProcessController(private val context: Context) {
         daemonPrefs.clearSavedPid()
     }
 
-    fun startDaemon(port: Int, address: String = "127.0.0.1"): Boolean {
+    fun startDaemon(port: Int, address: String = "127.0.0.1", password: String? = null): Boolean {
         val savedPid = findDaemonPid(port)
         if (savedPid > 0) {
             Log.i(TAG, "Daemon is already running with pid $savedPid on port $port. Reusing it.")
@@ -93,10 +93,11 @@ class DaemonProcessController(private val context: Context) {
         return try {
             // Debug 构建开启 VERBOSE 日志便于排查；Release 构建降至 INFO 减少日志噪声。
             val logLevel = if (com.ynk.virtualdisplay.BuildConfig.DEBUG) "VERBOSE" else "INFO"
+            val passwordArg = if (!password.isNullOrEmpty()) " daemon_secret_token='${password.replace("'", "'\\''")}'" else ""
             val cmd = arrayOf(
                 "sh",
                 "-c",
-                "nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false log_level=$logLevel daemon=true daemon_port=$port daemon_bind_address=$address >/dev/null 2>&1 &"
+                "nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false log_level=$logLevel daemon=true daemon_port=$port daemon_bind_address=$address$passwordArg >/dev/null 2>&1 &"
             )
 
             val classpath = context.packageCodePath + ":" + context.applicationInfo.sourceDir

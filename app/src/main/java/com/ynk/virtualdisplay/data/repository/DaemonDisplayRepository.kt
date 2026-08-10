@@ -2,7 +2,6 @@ package com.ynk.virtualdisplay.data.repository
 
 import android.content.Context
 import android.hardware.display.DisplayManager
-import android.os.Parcel
 import android.util.Log
 import android.view.InputEvent
 import android.view.Surface
@@ -13,6 +12,7 @@ import com.ynk.virtualdisplay.data.system.LauncherDataSource
 import com.ynk.virtualdisplay.manager.ShizukuManager
 import com.ynk.virtualdisplay.net.DaemonTransport
 import com.ynk.virtualdisplay.rpc.DaemonRpc
+import com.ynk.virtualdisplay.rpc.DaemonRpcState
 import com.ynk.virtualdisplay.util.ExceptionUtils
 import com.ynk.virtualdisplay.video.VideoStreamController
 import kotlinx.coroutines.CoroutineScope
@@ -82,6 +82,101 @@ class DaemonDisplayRepository(
     private var isBound = false
     private var currentStreamingDisplayId: Int = -1
     private var decoderSurface: Surface? = null
+    private var currentVideoWidth: Int = DEFAULT_WIDTH
+    private var currentVideoHeight: Int = DEFAULT_HEIGHT
+
+    // Guards the automatic-reconnect job so only one reconnect loop is ever
+    // in flight. Without this, a burst of LOOP_EXITED_ABNORMALLY emissions
+    // (e.g. multiple IOExceptions) could launch several concurrent attempts.
+    private val reconnectLock = Any()
+    @Volatile
+    private var reconnectJob: Job? = null
+
+    init {
+        // Watch the RPC message loop state. Whenever the negotiation socket
+        // dies (EOF, closed by server, daemon crash, etc.) while we are still
+        // supposed to be bound, kick off an auto-reconnect that re-runs
+        // transport.connect + startMessageLoop. Without this the user sees
+        // permanent "Connection error or timeout" on every tap until they
+        // kill and restart the app process.
+        scope.launch {
+            rpc.connectionState.collect { state ->
+                if (state == DaemonRpcState.LOOP_EXITED_ABNORMALLY && isBound) {
+                    Log.w(TAG, "DaemonRpc loop exited abnormally while isBound=true, scheduling auto-reconnect")
+                    scheduleAutoReconnect()
+                }
+            }
+        }
+    }
+
+    private fun scheduleAutoReconnect() {
+        synchronized(reconnectLock) {
+            val existing = reconnectJob
+            if (existing != null && existing.isActive) return
+            reconnectJob = scope.launch(Dispatchers.IO) {
+                val host = settingsDataSource.getServerHost()
+                val port = settingsDataSource.getServerPort()
+
+                var attempt = 0
+                val baseDelayMs = 200L
+                val maxDelayMs = 3000L
+                while (isBound) {
+                    attempt++
+                    val delayMs = (baseDelayMs * (1L shl (attempt - 1))).coerceAtMost(maxDelayMs)
+                    _connectionStatus.value = ConnectionStatus.RECONNECTING
+
+                    // Decide whether we need to re-launch the daemon process.
+                    // getDaemonPid() has a process cache so a stale PID may still
+                    // read positive after the process was killed externally
+                    // (e.g. `adb shell kill`, native crash, Low Memory Killer).
+                    // Hence we also probe the daemon TCP port with a short-lived
+                    // socket; if port probe fails, treat the daemon as dead and
+                    // restart it regardless of the cached PID.
+                    val cachedPid = processDataSource.getDaemonPid()
+                    val daemonListening = try {
+                        java.net.Socket().use { s ->
+                            s.connect(java.net.InetSocketAddress(host, port), 300)
+                            true
+                        }
+                    } catch (_: Exception) {
+                        false
+                    }
+
+                    val password = settingsDataSource.getServerPassword()
+                    if (cachedPid <= 0 || !daemonListening) {
+                        Log.i(TAG, "Auto-reconnect: daemon not alive (pid=$cachedPid, listening=$daemonListening), restarting daemon...")
+                        val started = processDataSource.startDaemon(port, host, password)
+                        if (!started) {
+                            Log.w(TAG, "Auto-reconnect: restartDaemon failed, retrying in ${delayMs}ms")
+                            kotlinx.coroutines.delay(delayMs)
+                            continue
+                        }
+                        _daemonPid.value = processDataSource.getDaemonPid()
+                    }
+
+                    Log.i(TAG, "Auto-reconnect: re-establishing transport negotiation (attempt $attempt)...")
+                    val connected = try {
+                        // Post-b7aef962 CONFIGURE_SESSION / roles declaration / token auth
+                        // handshake is handled inside transport.connect(...) as defaults.
+                        transport.connect(host, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "Auto-reconnect: transport.connect threw", t)
+                        false
+                    }
+                    if (connected) {
+                        rpc.startMessageLoop(this@launch)
+                        _connectionStatus.value = ConnectionStatus.CONNECTED
+                        _connectionError.value = null
+                        refreshManagedDisplays()
+                        Log.i(TAG, "Auto-reconnect succeeded on attempt $attempt (sessionId=${transport.session?.sessionId})")
+                        return@launch
+                    }
+                    Log.w(TAG, "Auto-reconnect: transport.connect failed (attempt $attempt), backing off ${delayMs}ms")
+                    kotlinx.coroutines.delay(delayMs)
+                }
+            }
+        }
+    }
 
     // Single-flight cleanup: ensures performCleanup runs at most once
     // concurrently. destroyService JOINs the in-flight cleanup launched by
@@ -90,12 +185,12 @@ class DaemonDisplayRepository(
     private val cleanupLock = Any()
     private var cleanupJob: Job? = null
 
-    private fun launchCleanupOnce(): Job = synchronized(cleanupLock) {
+    private fun launchCleanupOnce(killDaemon: Boolean): Job = synchronized(cleanupLock) {
         val existing = cleanupJob
         if (existing != null && existing.isActive) {
             existing
         } else {
-            scope.launch { performCleanup() }.also { cleanupJob = it }
+            scope.launch { performCleanup(killDaemon) }.also { cleanupJob = it }
         }
     }
 
@@ -121,6 +216,7 @@ class DaemonDisplayRepository(
                 // 读取连接配置 → Local DataSource
                 val port = settingsDataSource.getServerPort()
                 val host = settingsDataSource.getServerHost()
+                val password = settingsDataSource.getServerPassword()
 
                 if (!shizukuManager.isAvailable()) {
                     _connectionError.value = "Shizuku is not available"
@@ -130,7 +226,7 @@ class DaemonDisplayRepository(
 
                 // 启动守护进程 → Process DataSource
                 val started = withContext(Dispatchers.IO) {
-                    processDataSource.startDaemon(port, host)
+                    processDataSource.startDaemon(port, host, password)
                 }
                 if (!started) {
                     _connectionError.value = "Failed to start daemon process"
@@ -140,7 +236,12 @@ class DaemonDisplayRepository(
 
                 _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
 
-                val connected = transport.connect(host, port, 5000)
+                // Post-b7aef962: transport.connect performs the full 2-stage handshake
+                // (ROLE_NEGOTIATION → sessionId+deviceName → CONFIGURE_SESSION with
+                // declared roles) as well as optional secret_token auth. Defaults
+                // (secretToken=null, rolesMask=0 = "declare-on-bind" per-socket roles)
+                // match the server's default configuration.
+                val connected = transport.connect(host, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
                 if (connected) {
                     rpc.startMessageLoop(scope)
                     _connectionStatus.value = ConnectionStatus.CONNECTED
@@ -165,21 +266,32 @@ class DaemonDisplayRepository(
         }
         isBound = false
         launcherDataSource.unregisterDisplayListener(displayListener)
-        launchCleanupOnce()
+        launchCleanupOnce(killDaemon = false)
     }
 
-    private suspend fun performCleanup() {
+    private suspend fun performCleanup(killDaemon: Boolean) {
+        // Cancel any in-flight auto-reconnect before tearing things down;
+        // otherwise it races exitDaemon/transport.disconnect and re-opens
+        // sockets that we are about to kill.
+        runCatching { reconnectJob?.cancel() }
         try { videoController.stop() } catch (e: Exception) { Log.w(TAG, "Failed to stop video streaming", e) }
-        try {
-            // exitDaemon → Remote DataSource
-            remoteDataSource.exitDaemon()
-            kotlinx.coroutines.delay(100)
-        } catch (e: Exception) { Log.w(TAG, "Failed to send exit command", e) }
+        
+        if (killDaemon) {
+            try {
+                // exitDaemon → Remote DataSource
+                remoteDataSource.exitDaemon()
+                kotlinx.coroutines.delay(100)
+            } catch (e: Exception) { Log.w(TAG, "Failed to send exit command", e) }
+        }
+        
         rpc.stopMessageLoop()
         transport.disconnect()
-        // 停止守护进程 → Process DataSource
-        withContext(Dispatchers.IO) { processDataSource.stopDaemon() }
-        _daemonPid.value = -1
+        
+        if (killDaemon) {
+            // 停止守护进程 → Process DataSource
+            withContext(Dispatchers.IO) { processDataSource.stopDaemon() }
+            _daemonPid.value = -1
+        }
         _connectionError.value = null
         _connectionStatus.value = ConnectionStatus.DISCONNECTED
         _managedDisplayIds.value = emptySet()
@@ -223,6 +335,7 @@ class DaemonDisplayRepository(
     }
 
     override suspend fun setDisplaySurface(displayId: Int, surface: Surface?): Result<Unit> {
+        Log.i(TAG, "setDisplaySurface: displayId=$displayId surface=$surface valid=${surface?.isValid} currentStreaming=$currentStreamingDisplayId")
         decoderSurface = surface
         if (surface != null) {
             val isFirstTime = currentStreamingDisplayId != displayId
@@ -251,9 +364,15 @@ class DaemonDisplayRepository(
                 Log.w(TAG, "stop previous stream failed, proceeding anyway", it)
             }
         }
+        Log.i(TAG, "startStreamingToDisplay: displayId=$displayId surface=$decoderSurface valid=${decoderSurface?.isValid} dims=${DEFAULT_WIDTH}x${DEFAULT_HEIGHT}")
         val startResult = videoController.start(displayId, decoderSurface, DEFAULT_WIDTH, DEFAULT_HEIGHT)
         if (startResult.isSuccess) {
             currentStreamingDisplayId = displayId
+            currentVideoWidth = DEFAULT_WIDTH
+            currentVideoHeight = DEFAULT_HEIGHT
+            Log.i(TAG, "startStreamingToDisplay: success, currentStreamingDisplayId=$currentStreamingDisplayId")
+        } else {
+            Log.e(TAG, "startStreamingToDisplay: failed for displayId=$displayId", startResult.exceptionOrNull())
         }
         return startResult
     }
@@ -263,6 +382,8 @@ class DaemonDisplayRepository(
         val result = remoteDataSource.resizeDisplay(displayId, width, height, dpi)
         result.onSuccess {
             if (currentStreamingDisplayId == displayId) {
+                currentVideoWidth = width
+                currentVideoHeight = height
                 videoController.updateResolution(width, height)
             }
         }
@@ -301,22 +422,16 @@ class DaemonDisplayRepository(
     }
 
     override suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean> {
-        val isKeyEvent = event is android.view.KeyEvent
-        val parcel = Parcel.obtain()
-        return try {
-            event.writeToParcel(parcel, 0)
-            val parcelBytes = parcel.marshall()
-            // 输入注入 → Remote DataSource
-            remoteDataSource.injectInput(displayId, isKeyEvent, parcelBytes)
-        } finally {
-            parcel.recycle()
+        // Post-b7aef962: 直接通过 ROLE_CONTROL socket 上的 scrcpy 原生协议发送。
+        // 不再需要 Parcel marshalling —— 输入事件由 ScrcpyControlEncoder 编码。
+        val result = remoteDataSource.injectInput(displayId, event, currentVideoWidth, currentVideoHeight)
+        if (result.isFailure) {
+            Log.w(TAG, "injectInputWithDisplay(displayId=$displayId) failed: ${result.exceptionOrNull()?.message}")
         }
+        return result
     }
 
-    override suspend fun switchDisplay(displayId: Int): Result<Unit> {
-        startStreamingToDisplay(displayId)
-        return Result.success(Unit)
-    }
+
 
     override suspend fun getActiveDisplayIds(): Result<IntArray> {
         return Result.success(_managedDisplayIds.value.toIntArray())
@@ -325,17 +440,26 @@ class DaemonDisplayRepository(
     override fun destroyService() {
         isBound = false
         launcherDataSource.unregisterDisplayListener(displayListener)
-        val job = launchCleanupOnce()
+        val job = launchCleanupOnce(killDaemon = true)
         runCatching {
             runBlocking {
                 withTimeoutOrNull(3000) { job.join() }
+            }
+        }
+        runCatching {
+            runBlocking {
+                withContext(Dispatchers.IO) { processDataSource.stopDaemon() }
             }
         }
         scope.cancel()
     }
 
     override fun setVideoConfigCallback(callback: ((width: Int, height: Int) -> Unit)?) {
-        videoController.onVideoConfig = { _, w, h -> callback?.invoke(w, h) }
+        videoController.onVideoConfig = { _, w, h ->
+            currentVideoWidth = w
+            currentVideoHeight = h
+            callback?.invoke(w, h)
+        }
     }
 
     override fun setPerformanceStatsCallback(callback: ((String) -> Unit)?) {

@@ -40,6 +40,8 @@ object AppSettings {
 
     val serverPortKey = intPreferencesKey("server_port")
     val serverHostKey = stringPreferencesKey("server_host")
+    val serverPasswordKey = stringPreferencesKey("server_password")
+    val showPerformanceStatsKey = booleanPreferencesKey("show_performance_stats")
     val captureBackKey = booleanPreferencesKey("capture_back")
     val recentAppsKey = stringPreferencesKey("recent_apps")
     val prefDefaultWidthKey = stringPreferencesKey("pref_default_width")
@@ -48,6 +50,9 @@ object AppSettings {
 
     private val _captureBackCache = MutableStateFlow(false)
     val captureBackCache: StateFlow<Boolean> = _captureBackCache
+
+    private val _showPerformanceStatsCache = MutableStateFlow(true)
+    val showPerformanceStatsCache: StateFlow<Boolean> = _showPerformanceStatsCache
 
     @Volatile
     private var initialized = false
@@ -60,6 +65,7 @@ object AppSettings {
         scope.launch {
             appContext.dataStore.data.collect { prefs ->
                 _captureBackCache.value = prefs[captureBackKey] ?: false
+                _showPerformanceStatsCache.value = prefs[showPerformanceStatsKey] ?: true
             }
         }
     }
@@ -90,6 +96,34 @@ object AppSettings {
 
     suspend fun setServerHost(context: Context, host: String) {
         context.applicationContext.dataStore.edit { it[serverHostKey] = host }
+    }
+
+    fun serverPasswordFlow(context: Context): Flow<String> {
+        return context.applicationContext.dataStore.data.map { prefs ->
+            prefs[serverPasswordKey] ?: ""
+        }
+    }
+
+    suspend fun getServerPassword(context: Context): String {
+        return context.applicationContext.dataStore.data.first()[serverPasswordKey] ?: ""
+    }
+
+    suspend fun setServerPassword(context: Context, password: String) {
+        context.applicationContext.dataStore.edit { it[serverPasswordKey] = password }
+    }
+
+    fun showPerformanceStatsFlow(context: Context): Flow<Boolean> {
+        return context.applicationContext.dataStore.data.map { prefs ->
+            prefs[showPerformanceStatsKey] ?: true
+        }
+    }
+
+    suspend fun getShowPerformanceStats(context: Context): Boolean {
+        return context.applicationContext.dataStore.data.first()[showPerformanceStatsKey] ?: true
+    }
+
+    suspend fun setShowPerformanceStats(context: Context, show: Boolean) {
+        context.applicationContext.dataStore.edit { it[showPerformanceStatsKey] = show }
     }
 
     fun captureBackFlow(context: Context): Flow<Boolean> {

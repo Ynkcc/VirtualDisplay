@@ -17,7 +17,6 @@ import com.ynk.virtualdisplay.rpc.DaemonRpc
 import com.ynk.virtualdisplay.ui.main.MainViewModel
 import com.ynk.virtualdisplay.util.ExceptionUtils
 import com.ynk.virtualdisplay.video.VideoStreamController
-import com.ynk.virtualdisplay.video.VideoStreamRpc
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -47,14 +46,12 @@ val appModule = module {
     // VideoStreamRpc：视频流 RPC（供 VideoStreamController 使用）
     single { DaemonControlApiImpl(get(), get()) }
     single<DaemonControlApi> { get<DaemonControlApiImpl>() }
-    single<VideoStreamRpc> { get<DaemonControlApiImpl>() }
-
     // VideoStreamController 使用的协程 Scope：主线程调度器 + SupervisorJob + 异常处理器
     // 注意：这是跨组件共享的单例 Scope，任何地方都不得对其调用 cancel()，
     // 否则会不可逆地破坏 VideoStreamController 等所有使用者。
     single { CoroutineScope(Dispatchers.Main + SupervisorJob() + ExceptionUtils.coroutineExceptionHandler("VideoStreamController")) }
 
-    single { VideoStreamController(get(), get(), get()) }
+    single { VideoStreamController(get(), get()) }
 
     // === Data 层 DataSource（4 个方向）===
     // Local：  AppSettings / DaemonPrefs 本地配置读写

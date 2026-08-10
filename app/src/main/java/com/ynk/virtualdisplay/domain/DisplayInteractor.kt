@@ -149,12 +149,6 @@ class DisplayInteractor(
         return repository.injectInputWithDisplayId(event, displayId)
     }
 
-    /**
-     * 切换当前镜像的显示器目标。
-     */
-    suspend fun switchDisplay(displayId: Int): Result<Unit> {
-        return repository.switchDisplay(displayId)
-    }
 
     /**
      * 获取当前活动显示器 ID 列表。

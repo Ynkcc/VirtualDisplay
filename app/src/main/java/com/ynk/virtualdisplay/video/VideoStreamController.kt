@@ -5,14 +5,12 @@ import android.view.Surface
 import com.ynk.virtualdisplay.net.DaemonTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.IOException
 
 class VideoStreamController(
-    private val rpc: VideoStreamRpc,
     private val transport: DaemonTransport,
     private val scope: CoroutineScope
 ) {
@@ -30,30 +28,41 @@ class VideoStreamController(
     var onPerformanceStats: ((String) -> Unit)? = null
 
     suspend fun start(displayId: Int, surface: Surface?, w: Int, h: Int): Result<Unit> = mutex.withLock {
-        Log.i(TAG, "Starting video stream for display $displayId...")
+        Log.i(TAG, "Starting video stream for display $displayId... (surface=$surface valid=${surface?.isValid} dims=${w}x${h})")
 
         // 1. 如果已有正在运行的本地解码器，先将其彻底关闭并清理
-        if (decoder != null) {
+        val decoderExisted = decoder != null
+        if (decoderExisted) {
             decoder?.stop()
             decoder = null
             tracker = null
         }
 
         // 2. 物理断开之前残留的 Scrcpy 子通道 (视频 + 控制) 以保干净
-        transport.disconnectScrcpyChannels()
-
-        // 3. 发送 startVideoStream 信令，二阶段协商
-        val startResult = rpc.startVideoStream(displayId)
-        startResult.onFailure {
-            Log.e(TAG, "Failed to send startVideoStream(209) to daemon", it)
-            return@withLock Result.failure(it)
+        //    注意：b7aef962 之后 TYPE_STOP_VIDEO_STREAM (210) 已不再发，
+        //    服务端在 video socket 关闭时自动停止编码器、释放 VD 引用。
+        //    但 reconnectVideoSocket() 必须在 decoder.stop() 之前执行：
+        //    关闭旧 video socket 会使 decoder input worker 的 read() 抛
+        //    SocketException 退出，这样 stop() 里的 join 就不会超时 500ms
+        //    （旧 worker 仍持有旧 codec DirectByteBuffer 引用会在 rebuildCodec
+        //    触发 release 后导致 use-after-free native crash）。
+        if (decoderExisted) {
+            transport.reconnectVideoSocket()
+        } else {
+            // 首次 start，先断开残留
+            transport.disconnectScrcpyChannels()
         }
 
-        // 4. 协商 Success，此时物理连接 ROLE_CONTROL 和 ROLE_VIDEO 通道并绑定
-        val channelsConnected = transport.connectScrcpyChannels()
+        // 3. (start 阶段) 不再发送 TYPE_START_VIDEO_STREAM (209) —— 新协议下
+        //    绑定 ROLE_VIDEO socket 时服务端自动启动编码器推流。
+        Log.i(TAG, "Pre-start hook OK (post-b7aef962: no 209 command, socket bind auto-starts stream). Connecting Scrcpy channels...")
+
+        // 4. 打开 ROLE_CONTROL + ROLE_VIDEO socket，携带 displayId 路由，
+        //    等服务端 displayId ack 后返回。socket 建立即服务端开始推流。
+        val channelsConnected = transport.connectScrcpyChannels(displayId)
         if (!channelsConnected) {
-            Log.e(TAG, "Failed to connect Scrcpy channels (video and control sockets)")
-            return@withLock Result.failure(IOException("Scrcpy channels connection failed"))
+            Log.e(TAG, "Failed to connect Scrcpy channels (video and control sockets) with displayId=$displayId")
+            return@withLock Result.failure(IOException("Scrcpy channels connection failed (displayId=$displayId)"))
         }
 
         // 5. 成功建立物理连接后，获取视频流读取端
@@ -68,6 +77,7 @@ class VideoStreamController(
             Log.e(TAG, msg)
             return@withLock Result.failure(IllegalStateException(msg))
         }
+        Log.i(TAG, "Video input stream acquired, creating decoder (surface=$surface valid=${surface?.isValid} dims=${w}x${h})")
 
         val decoderResult = runCatching {
             val frameReader = ScrcpyFrameReader(videoIn)
@@ -97,7 +107,7 @@ class VideoStreamController(
             return@withLock Result.failure(it)
         }
 
-        Log.i(TAG, "VideoStreamController started successfully for display $displayId")
+        Log.i(TAG, "VideoStreamController started successfully for display $displayId (surface bound=${surface != null && surface.isValid})")
         Result.success(Unit)
     }
 
@@ -108,10 +118,17 @@ class VideoStreamController(
     private suspend fun stopInternal(force: Boolean = false) {
         Log.i(TAG, "Stopping video stream...")
         if (!force) {
-            // 保持极其严谨的停止时序：先发 210 给服务端让其干净结束 SurfaceEncoder，再停客户端 decoder
-            val result = rpc.stopVideoStream()
-            result.onFailure {
-                Log.w(TAG, "Failed to send stopVideoStream(210) to daemon, proceeding with decoder cleanup", it)
+            // Post-b7aef962: stopVideoStream (210) removed. Video server stops
+            // automatically when the ROLE_VIDEO socket closes. We proactively reconnect
+            // the video socket so the input worker read() unblocks via SocketException
+            // BEFORE the decoder.stop() joins on the worker thread — otherwise join(500)
+            // times out and rebuildCodec (triggered by resizeDisplay /
+            // updateResolution on the main thread) releases the old codec while
+            // the worker still holds DirectByteBuffer refs, causing a native
+            // Data Abort (use-after-free).
+            val reconnectResult = runCatching { transport.reconnectVideoSocket() }
+            if (reconnectResult.isFailure) {
+                Log.w(TAG, "reconnectVideoSocket failed in stopInternal (proceeding with decoder stop)", reconnectResult.exceptionOrNull())
             }
         }
 

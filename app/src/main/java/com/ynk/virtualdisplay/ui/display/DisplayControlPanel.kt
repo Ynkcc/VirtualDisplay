@@ -34,6 +34,21 @@ class DisplayControlPanel(
     private var isCollapsed = false
     private var isDragging = false
 
+    private val collapseRunnable = Runnable {
+        collapse()
+    }
+
+    private fun resetCollapseTimer() {
+        handler?.removeCallbacks(collapseRunnable)
+        if (!isCollapsed && !isDragging) {
+            handler?.postDelayed(collapseRunnable, 3000)
+        }
+    }
+
+    private fun stopCollapseTimer() {
+        handler?.removeCallbacks(collapseRunnable)
+    }
+
     private val handleContainer: TextView
     private val buttonsContainer: LinearLayout
     private val divider: View
@@ -113,6 +128,7 @@ class DisplayControlPanel(
                 background = backgroundDrawable
 
                 setOnTouchListener { v, event ->
+                    resetCollapseTimer()
                     when (event.action) {
                         MotionEvent.ACTION_DOWN -> {
                             backgroundDrawable.setColor("#30FFFFFF".toColorInt())
@@ -182,6 +198,7 @@ class DisplayControlPanel(
         handleContainer.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    stopCollapseTimer()
                     dX = this.x - event.rawX
                     dY = this.y - event.rawY
                     startRawX = event.rawX
@@ -190,6 +207,7 @@ class DisplayControlPanel(
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    stopCollapseTimer()
                     val parent = this.parent as View
                     val newX = (event.rawX + dX).coerceIn(0f, (parent.width - this.width).toFloat())
                     val newY = (event.rawY + dY).coerceIn(0f, (parent.height - this.height).toFloat())
@@ -204,8 +222,16 @@ class DisplayControlPanel(
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (event.actionMasked == MotionEvent.ACTION_UP) {
                         if (!isDragging) {
-                            toggleCollapse()
+                            if (isCollapsed) {
+                                expand()
+                            } else {
+                                collapse()
+                            }
+                        } else {
+                            resetCollapseTimer()
                         }
+                    } else {
+                        resetCollapseTimer()
                     }
                     true
                 }
@@ -225,6 +251,29 @@ class DisplayControlPanel(
                 this.y = (parent.height - selfHeight).coerceAtLeast(0f)
             }
         }
+    }
+
+    fun collapse() {
+        if (!isCollapsed) {
+            toggleCollapse()
+        }
+    }
+
+    fun expand() {
+        if (isCollapsed) {
+            toggleCollapse()
+        }
+        resetCollapseTimer()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        resetCollapseTimer()
+    }
+
+    override fun onDetachedFromWindow() {
+        stopCollapseTimer()
+        super.onDetachedFromWindow()
     }
 
     private fun toggleCollapse() {
@@ -254,7 +303,6 @@ class DisplayControlPanel(
             handleLp.setMargins(0, 0, 0, (6 * density).toInt())
         }
         handleContainer.layoutParams = handleLp
-
     }
 }
 

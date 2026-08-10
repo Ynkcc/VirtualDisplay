@@ -57,6 +57,13 @@ class DisplayActivity : ComponentActivity() {
     private var videoHeight = 0
     private var currentVideoRotation = 0
 
+    // Tracks the surface reported by VideoSurfaceView before videoWidth/Height
+    // are known. Without this, onSurfaceAvailable drops the surface when
+    // videoWidth==0 (the virtual display may not be registered in the system
+    // DisplayManager yet at onCreate time), and nobody retroactively feeds it
+    // to the decoder → permanent black screen.
+    @Volatile private var pendingSurface: Surface? = null
+
     private var resizeJob: Job? = null
 
     private lateinit var rootLayout: FrameLayout
@@ -124,6 +131,14 @@ class DisplayActivity : ComponentActivity() {
             }
         }
 
+        lifecycleScope.launch {
+            AppSettings.showPerformanceStatsCache.collect { show ->
+                if (::statsOverlay.isInitialized) {
+                    statsOverlay.visibility = if (show) View.VISIBLE else View.GONE
+                }
+            }
+        }
+
         val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
         dm.registerDisplayListener(displayListener, null)
         updateDisplayInfo(displayId)
@@ -162,6 +177,7 @@ class DisplayActivity : ComponentActivity() {
 
     private fun requestHighRefreshRate() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            @Suppress("DEPRECATION")
             val display = windowManager.defaultDisplay
             val modes = display.supportedModes
             val bestMode = modes.maxByOrNull { it.refreshRate }
@@ -214,19 +230,23 @@ class DisplayActivity : ComponentActivity() {
             )
             setVideoCallbacks(object : VideoSurfaceView.VideoCallbacks {
                 override fun onSurfaceAvailable(surface: Surface) {
-                    Log.i(TAG, "Video surface available")
+                    Log.i(TAG, "onSurfaceAvailable: surface=$surface valid=${surface.isValid} videoSize=${videoWidth}x${videoHeight}")
+                    pendingSurface = surface
                     if (videoWidth > 0 && videoHeight > 0) {
                         setVideoSurface(surface)
+                    } else {
+                        Log.w(TAG, "onSurfaceAvailable: videoWidth/Height not yet known (display may not be registered), surface cached as pending")
                     }
                 }
 
                 override fun onSurfaceDestroyed() {
-                    Log.i(TAG, "Video surface destroyed")
+                    Log.i(TAG, "onSurfaceDestroyed")
+                    pendingSurface = null
                     setVideoSurface(null)
                 }
 
                 override fun onSurfaceChanged(width: Int, height: Int) {
-                    Log.d(TAG, "Video surface changed: ${width}x${height}")
+                    Log.d(TAG, "onSurfaceChanged: ${width}x${height}")
                 }
             })
             setInputCallbacks(object : VideoSurfaceView.InputCallbacks {
@@ -325,20 +345,43 @@ class DisplayActivity : ComponentActivity() {
             val spec = displayMetricsManager.getVirtualDisplaySpec(display)
             val width = spec.width
             val height = spec.height
+            val wasFirstDiscovery = (videoWidth == 0 && videoHeight == 0)
             if (videoWidth != width || videoHeight != height) {
-                Log.d(TAG, "Virtual Display #$displayId size changed: ${width}x${height}")
+                Log.i(TAG, "updateDisplayInfo: #$displayId size=${width}x${height} (prev=${videoWidth}x${videoHeight})")
                 videoWidth = width
                 videoHeight = height
                 inputController.updateVideoSize(width, height)
                 videoSurfaceView.setVideoSize(width, height)
 
-                val dpi = spec.dpi
-                resizeJob?.cancel()
-                resizeJob = lifecycleScope.launch {
-                    kotlinx.coroutines.delay(250)
-                    repository.resizeDisplay(displayId, width, height, dpi)
+                // Retroactively feed the pending surface to the decoder if it
+                // arrived before display dimensions were known.
+                val ps = pendingSurface
+                if (ps != null && ps.isValid) {
+                    Log.i(TAG, "updateDisplayInfo: applying pending surface now that dimensions are known")
+                    pendingSurface = null
+                    setVideoSurface(ps)
+                }
+
+                // Only send a resize command to the daemon when the display
+                // dimensions *changed* from a previously known value. On first
+                // discovery (wasFirstDiscovery), the display was just created
+                // with the correct dimensions by createDisplay — sending a
+                // redundant resize causes the server to restart its
+                // SurfaceEncoder, which closes the video socket and kills the
+                // decoder stream.
+                if (!wasFirstDiscovery) {
+                    val dpi = spec.dpi
+                    resizeJob?.cancel()
+                    resizeJob = lifecycleScope.launch {
+                        kotlinx.coroutines.delay(250)
+                        repository.resizeDisplay(displayId, width, height, dpi)
+                    }
+                } else {
+                    Log.i(TAG, "updateDisplayInfo: first discovery, skipping resize (display already created with correct dimensions)")
                 }
             }
+        } ?: run {
+            Log.w(TAG, "updateDisplayInfo: Display #$displayId not found in system DisplayManager yet")
         }
     }
 
@@ -371,6 +414,7 @@ class DisplayActivity : ComponentActivity() {
             val targetView = videoSurfaceView
             targetView.requestFocus()
             Handler(Looper.getMainLooper()).post {
+                @Suppress("DEPRECATION")
                 imm.showSoftInput(targetView, InputMethodManager.SHOW_IMPLICIT)
             }
         } else {

@@ -14,7 +14,8 @@ enum class ConnectionStatus {
     BINDING,
     CONNECTED,
     DISCONNECTED,
-    ERROR
+    ERROR,
+    RECONNECTING
 }
 
 /**
@@ -71,8 +72,6 @@ interface IDisplayRepository {
     /** 注入带 DisplayId 的输入事件 */
     suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean>
 
-    /** 切换当前镜像的显示器目标 */
-    suspend fun switchDisplay(displayId: Int): Result<Unit>
 
     /** 获取当前 Daemon 中的活动显示器 ID 列表 */
     suspend fun getActiveDisplayIds(): Result<IntArray>

@@ -26,6 +26,24 @@ class AppSettingsDataSource(private val context: Context) {
     /** 获取 Daemon 绑定地址（默认 127.0.0.1） */
     suspend fun getServerHost(): String = AppSettings.getServerHost(context)
 
+    /** 获取 Daemon 服务连接密码 */
+    suspend fun getServerPassword(): String = AppSettings.getServerPassword(context)
+
+    /** 监听 Daemon 服务连接密码 Flow */
+    fun serverPasswordFlow(): Flow<String> = AppSettings.serverPasswordFlow(context)
+
+    /** 设置 Daemon 服务连接密码 */
+    suspend fun setServerPassword(password: String) = AppSettings.setServerPassword(context, password)
+
+    /** 获取是否显示质量诊断信息 */
+    suspend fun getShowPerformanceStats(): Boolean = AppSettings.getShowPerformanceStats(context)
+
+    /** 监听是否显示质量诊断信息 Flow */
+    fun showPerformanceStatsFlow(): Flow<Boolean> = AppSettings.showPerformanceStatsFlow(context)
+
+    /** 设置是否显示质量诊断信息 */
+    suspend fun setShowPerformanceStats(show: Boolean) = AppSettings.setShowPerformanceStats(context, show)
+
     // === 显示器 Flags 配置（DisplayInteractor.buildDefaultFlags 实际使用）===
 
     /** 读取所有 DisplayFlag 的开关状态 Map<flagKey, enabled> */

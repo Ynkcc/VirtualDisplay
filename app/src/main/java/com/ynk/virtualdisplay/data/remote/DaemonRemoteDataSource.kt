@@ -1,5 +1,6 @@
 package com.ynk.virtualdisplay.data.remote
 
+import android.view.InputEvent
 import com.ynk.virtualdisplay.rpc.DaemonControlApi
 
 /**
@@ -35,22 +36,13 @@ class DaemonRemoteDataSource(
     suspend fun startActivity(packageName: String, displayId: Int): Result<Int> =
         controlApi.startActivity(packageName, displayId)
 
-    // === 输入注入 ===
+    // === 输入注入 (scrcpy-native protocol via ROLE_CONTROL socket) ===
 
     suspend fun injectInput(
-        displayId: Int, isKey: Boolean, parcelBytes: ByteArray
-    ): Result<Boolean> = controlApi.injectInput(displayId, isKey, parcelBytes)
+        displayId: Int, event: InputEvent, screenWidth: Int, screenHeight: Int
+    ): Result<Boolean> = controlApi.injectInput(displayId, event, screenWidth, screenHeight)
 
     // === 视频流 / 镜像切换 ===
-
-    suspend fun switchDisplay(displayId: Int): Result<Unit> =
-        controlApi.switchDisplay(displayId)
-
-    suspend fun startVideoStream(displayId: Int): Result<Unit> =
-        controlApi.startVideoStream(displayId)
-
-    suspend fun stopVideoStream(): Result<Unit> =
-        controlApi.stopVideoStream()
 
     // === 守护进程生命周期 ===
 

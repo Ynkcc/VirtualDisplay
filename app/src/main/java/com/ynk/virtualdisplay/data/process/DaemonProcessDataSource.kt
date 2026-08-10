@@ -17,8 +17,8 @@ class DaemonProcessDataSource(
      * 同步启动 daemon 进程（阻塞 IO 线程）。
      * @return true 表示启动成功（或已在运行）
      */
-    suspend fun startDaemon(port: Int, host: String): Boolean =
-        processController.startDaemon(port, host)
+    suspend fun startDaemon(port: Int, host: String, password: String? = null): Boolean =
+        processController.startDaemon(port, host, password)
 
     /**
      * 同步停止 daemon 进程（阻塞 IO 线程）。

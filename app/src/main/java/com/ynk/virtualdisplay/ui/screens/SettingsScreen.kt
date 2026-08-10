@@ -38,6 +38,9 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
 
     val serverPort by AppSettings.serverPortFlow(context).collectAsState(initial = 27183)
+    val serverHost by AppSettings.serverHostFlow(context).collectAsState(initial = "127.0.0.1")
+    val serverPassword by AppSettings.serverPasswordFlow(context).collectAsState(initial = "")
+    val showPerformanceStats by AppSettings.showPerformanceStatsFlow(context).collectAsState(initial = true)
     val captureBack by AppSettings.captureBackFlow(context).collectAsState(initial = false)
 
     val flagStates = remember {
@@ -53,6 +56,24 @@ fun SettingsScreen(
 
     var flagsExpanded by remember { mutableStateOf(false) }
     var portText by remember { mutableStateOf(serverPort.toString()) }
+    var hostText by remember { mutableStateOf(serverHost) }
+    var passwordText by remember { mutableStateOf(serverPassword) }
+
+    LaunchedEffect(serverPort) {
+        if (portText != serverPort.toString()) {
+            portText = serverPort.toString()
+        }
+    }
+    LaunchedEffect(serverHost) {
+        if (hostText != serverHost) {
+            hostText = serverHost
+        }
+    }
+    LaunchedEffect(serverPassword) {
+        if (passwordText != serverPassword) {
+            passwordText = serverPassword
+        }
+    }
 
     Column(
         modifier = modifier
@@ -172,6 +193,19 @@ fun SettingsScreen(
                         }
                     }
                 )
+
+                HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+
+                SettingSwitchRow(
+                    title = "质量诊断诊断信息",
+                    description = "在投屏界面右上角显示分辨率、帧率、码率、延迟和抖动等性能诊断数据",
+                    checked = showPerformanceStats,
+                    onCheckedChange = { isChecked ->
+                        scope.launch {
+                            AppSettings.setShowPerformanceStats(context, isChecked)
+                        }
+                    }
+                )
             }
         }
 
@@ -184,16 +218,28 @@ fun SettingsScreen(
                 .fillMaxWidth()
                 .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(16.dp))
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    text = "TCP 网络端口设置",
+                    text = "TCP 网络与安全设置",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
-                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = hostText,
+                    onValueChange = { newValue ->
+                        hostText = newValue
+                        scope.launch {
+                            AppSettings.setServerHost(context, newValue)
+                        }
+                    },
+                    label = { Text("监听地址") },
+                    placeholder = { Text("127.0.0.1") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 OutlinedTextField(
                     value = portText,
@@ -209,15 +255,29 @@ fun SettingsScreen(
                             }
                         }
                     },
-                    label = { Text("服务基础端口 (1024-65535)") },
+                    label = { Text("监听端口 (1024-65535)") },
                     placeholder = { Text("27183") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+
+                OutlinedTextField(
+                    value = passwordText,
+                    onValueChange = { newValue ->
+                        passwordText = newValue
+                        scope.launch {
+                            AppSettings.setServerPassword(context, newValue)
+                        }
+                    },
+                    label = { Text("连接密码 (空表示不设密码)") },
+                    placeholder = { Text("未设置密码") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
                 Text(
-                    text = "更改端口需要重新启动服务生效。",
+                    text = "更改网络与安全设置需要重新启动服务生效。",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     lineHeight = 14.sp
@@ -258,6 +318,7 @@ fun SettingsScreen(
                     val (statusText, statusColor) = when (connectionStatus) {
                         ConnectionStatus.CONNECTED -> "已连接" to Color(0xFF26A69A)
                         ConnectionStatus.BINDING -> "绑定中..." to Color(0xFFFFB74D)
+                        ConnectionStatus.RECONNECTING -> "重连中..." to Color(0xFFFFB74D)
                         ConnectionStatus.DISCONNECTED -> "断开" to Color(0xFFEF5350)
                         ConnectionStatus.ERROR -> "错误" to Color(0xFFEF5350)
                         ConnectionStatus.IDLE -> "空闲" to Color(0xFF78909C)

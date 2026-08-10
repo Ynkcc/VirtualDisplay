@@ -69,12 +69,14 @@ class H264StreamDecoder(
         val isDummy = surface == null || !surface.isValid
         isUsingDummySurface = isDummy
         val target = if (!isDummy) surface else getDummySurface()
+        Log.i(TAG, "setDisplaySurface: surface=$surface valid=${surface?.isValid} isDummy=$isDummy codec=${codec != null}")
         synchronized(codecLock) {
             targetSurface = target
             val activeCodec = codec
             if (activeCodec != null) {
                 try {
                     activeCodec.setOutputSurface(target)
+                    Log.i(TAG, "setOutputSurface OK: switched to new surface")
                 } catch (e: Exception) {
                     Log.w(TAG, "setOutputSurface failed, rebuilding codec", e)
                     rebuildCodec()
@@ -85,6 +87,7 @@ class H264StreamDecoder(
 
     fun updateResolution(newWidth: Int, newHeight: Int) {
         if (width == newWidth && height == newHeight) return
+        Log.i(TAG, "updateResolution: ${width}x${height} -> ${newWidth}x${newHeight} (running=${running.get()})")
         width = newWidth
         height = newHeight
         tracker.actualWidth = newWidth
@@ -113,6 +116,8 @@ class H264StreamDecoder(
         synchronized(codecLock) {
             try {
                 val activeSurface = targetSurface ?: getDummySurface()
+                val isDummy = (targetSurface == null)
+                Log.i(TAG, "createCodecInternal: ${width}x${height} surface=$activeSurface valid=${activeSurface.isValid} isDummy=$isDummy")
                 val result = VideoDecoderTuning.createConfiguredDecoder(VIDEO_MIME, width, height, activeSurface)
                 codec = result.codec
                 Log.i(TAG, "Codec configured and started: ${width}x${height} via ${result.decoderName} [${result.appliedOptions.joinToString()}]")
@@ -188,12 +193,27 @@ class H264StreamDecoder(
     }
 
     private fun runInputLoop() {
+        var framesRead = 0
+        var firstFrameLogged = false
+        var lastStatsLogMs = System.currentTimeMillis()
         try {
             while (running.get() && !Thread.currentThread().isInterrupted) {
                 val frame = frameReader.readNextFrame() ?: break
                 if (Thread.currentThread().isInterrupted) break
 
+                framesRead++
+                if (!firstFrameLogged) {
+                    firstFrameLogged = true
+                    Log.i(TAG, "First frame received: size=${frame.size} pts=${frame.ptsUs} isConfig=${frame.isConfig} isKeyFrame=${frame.isKeyFrame}")
+                }
                 tracker.recordReceived(frame.size)
+
+                // Periodic stats log every 3s
+                val nowMs = System.currentTimeMillis()
+                if (nowMs - lastStatsLogMs >= 3000) {
+                    Log.i(TAG, "Input loop stats: framesRead=$framesRead in ${nowMs - lastStatsLogMs}ms, last frame size=${frame.size} isConfig=${frame.isConfig}")
+                    lastStatsLogMs = nowMs
+                }
 
                 var dispatched = false
                 var abort = false
@@ -267,6 +287,10 @@ class H264StreamDecoder(
     private fun runOutputLoop() {
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_VIDEO) }
         val bufferInfo = MediaCodec.BufferInfo()
+        var framesDecoded = 0
+        var framesRendered = 0
+        var firstDecodeLogged = false
+        var lastStatsLogMs = System.currentTimeMillis()
         while (running.get() && !Thread.currentThread().isInterrupted) {
             try {
                 var tryAgain = false
@@ -291,10 +315,17 @@ class H264StreamDecoder(
                                 return@synchronized
                             }
 
+                            framesDecoded++
+                            if (!firstDecodeLogged) {
+                                firstDecodeLogged = true
+                                Log.i(TAG, "First frame decoded: size=$size pts=${bufferInfo.presentationTimeUs} flags=${bufferInfo.flags}")
+                            }
+
                             // update decode latency stats
                             tracker.recordDecode(bufferInfo.presentationTimeUs)
 
                             if (targetSurface != null && !isUsingDummySurface) {
+                                framesRendered++
                                 if (ultraLowLatency) {
                                     runCatching { activeCodec.releaseOutputBuffer(outputIndex, System.nanoTime()) }
                                     tracker.recordRender(System.nanoTime())
@@ -311,6 +342,13 @@ class H264StreamDecoder(
                                 }
                             } else {
                                 runCatching { activeCodec.releaseOutputBuffer(outputIndex, false) }
+                            }
+
+                            // Periodic stats log every 3s
+                            val nowMs = System.currentTimeMillis()
+                            if (nowMs - lastStatsLogMs >= 3000) {
+                                Log.i(TAG, "Output loop stats: decoded=$framesDecoded rendered=$framesRendered in ${nowMs - lastStatsLogMs}ms, isDummy=$isUsingDummySurface")
+                                lastStatsLogMs = nowMs
                             }
 
                             if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
@@ -335,6 +373,15 @@ class H264StreamDecoder(
 
                             tracker.actualWidth = visibleWidth
                             tracker.actualHeight = visibleHeight
+                            // CRITICAL: update local width/height to the actual codec
+                            // dimensions so that a subsequent updateResolution() call
+                            // (e.g. from a stale resize job) becomes a no-op instead of
+                            // triggering rebuildCodec(). Rebuilding the codec after the
+                            // config frame (SPS/PPS) has already been consumed leaves the
+                            // new codec without any codec-config → it can never decode
+                            // subsequent P-frames → permanent black screen.
+                            width = visibleWidth
+                            height = visibleHeight
                             Log.i(TAG, "Output format changed: coded=${w}x${h} visible=${visibleWidth}x${visibleHeight}")
                             onVideoConfig?.invoke("H.264", visibleWidth, visibleHeight)
                         }
@@ -355,7 +402,7 @@ class H264StreamDecoder(
                 if (running.get()) Log.w(TAG, "Output loop error", e)
             }
         }
-        Log.i(TAG, "Output loop exiting")
+        Log.i(TAG, "Output loop exiting (decoded=$framesDecoded rendered=$framesRendered)")
     }
 
     private data class DecodedOutputFrame(

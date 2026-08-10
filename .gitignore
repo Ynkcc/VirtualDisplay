@@ -14,3 +14,10 @@ refs/
 /.trae/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# daemon module artifacts
+daemon/build/
+daemon/tmp/
+
+refs

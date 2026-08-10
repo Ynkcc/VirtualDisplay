@@ -19,6 +19,25 @@ internal object DaemonHandshake {
         out.flush()
     }
 
+    fun writeDisplayId(out: OutputStream, displayId: Int) {
+        out.write((displayId ushr 24) and 0xFF)
+        out.write((displayId ushr 16) and 0xFF)
+        out.write((displayId ushr 8) and 0xFF)
+        out.write(displayId and 0xFF)
+        out.flush()
+    }
+
+    fun writeToken(out: OutputStream, token: String) {
+        val bytes = token.toByteArray(StandardCharsets.UTF_8)
+        // 4 字节 Big-Endian 长度 + UTF-8 token bytes
+        out.write((bytes.size ushr 24) and 0xFF)
+        out.write((bytes.size ushr 16) and 0xFF)
+        out.write((bytes.size ushr 8) and 0xFF)
+        out.write(bytes.size and 0xFF)
+        out.write(bytes)
+        out.flush()
+    }
+
     fun readSessionId(input: InputStream): Int {
         val b1 = input.read()
         val b2 = input.read()
@@ -26,6 +45,17 @@ internal object DaemonHandshake {
         val b4 = input.read()
         if (b1 < 0 || b2 < 0 || b3 < 0 || b4 < 0) {
             throw IOException("Connection closed before sessionId received")
+        }
+        return (b1 shl 24) or (b2 shl 16) or (b3 shl 8) or b4
+    }
+
+    fun readInt32(input: InputStream): Int {
+        val b1 = input.read()
+        val b2 = input.read()
+        val b3 = input.read()
+        val b4 = input.read()
+        if (b1 < 0 || b2 < 0 || b3 < 0 || b4 < 0) {
+            throw IOException("Connection closed before 32-bit value received")
         }
         return (b1 shl 24) or (b2 shl 16) or (b3 shl 8) or b4
     }

@@ -1,8 +1,15 @@
 package com.ynk.virtualdisplay.rpc
 
+import android.util.Log
+import android.view.InputEvent
+import android.view.KeyEvent
+import android.view.MotionEvent
 import com.ynk.virtualdisplay.protocol.ControlMessage
 import com.ynk.virtualdisplay.protocol.DeviceMessage
+import com.ynk.virtualdisplay.protocol.ScrcpyControlEncoder
 import java.io.IOException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 interface DaemonControlApi {
     suspend fun createDisplay(name: String, w: Int, h: Int, dpi: Int, flags: Int): Result<Int>
@@ -11,11 +18,25 @@ interface DaemonControlApi {
     suspend fun startActivity(packageName: String, displayId: Int): Result<Int>
     suspend fun getActiveDisplayIds(): Result<IntArray>
     suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>>
-    suspend fun injectInput(displayId: Int, isKey: Boolean, parcelBytes: ByteArray): Result<Boolean>
-    suspend fun switchDisplay(displayId: Int): Result<Unit>
+    /**
+     * 注入输入事件 —— 通过 ROLE_CONTROL socket 上的 scrcpy 原生控制协议发送。
+     *
+     * 服务端 commit b7aef962 移除了 TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID (206)，
+     * 输入注入必须使用 scrcpy 原生协议：
+     *   - KeyEvent → TYPE_INJECT_KEYCODE (0)
+     *   - MotionEvent (touch) → TYPE_INJECT_TOUCH_EVENT (2)
+     *   - MotionEvent (scroll) → TYPE_INJECT_SCROLL_EVENT (3)
+     *
+     * ROLE_CONTROL socket 在 connectScrcpyChannels(displayId) 时已路由到
+     * 目标显示器，服务端 Controller 会在对应的 displayId 上执行注入。
+     *
+     * @param displayId 目标显示器 ID (用于日志)
+     * @param event     要注入的 KeyEvent 或 MotionEvent
+     * @param screenWidth 视频表面宽度 (像素，用于位置编码)
+     * @param screenHeight 视频表面高度 (像素，用于位置编码)
+     */
+    suspend fun injectInput(displayId: Int, event: InputEvent, screenWidth: Int, screenHeight: Int): Result<Boolean>
     suspend fun exitDaemon(): Result<Unit>
-    suspend fun startVideoStream(displayId: Int): Result<Unit>
-    suspend fun stopVideoStream(): Result<Unit>
     suspend fun getRotation(displayId: Int): Result<Int>
     suspend fun freezeRotation(displayId: Int, rotation: Int): Result<Unit>
     suspend fun thawRotation(displayId: Int): Result<Unit>
@@ -25,7 +46,7 @@ interface DaemonControlApi {
 class DaemonControlApiImpl(
     private val rpc: DaemonRpc,
     private val transport: com.ynk.virtualdisplay.net.DaemonTransport
-) : DaemonControlApi, com.ynk.virtualdisplay.video.VideoStreamRpc {
+) : DaemonControlApi {
 
     override suspend fun createDisplay(name: String, w: Int, h: Int, dpi: Int, flags: Int): Result<Int> {
         val msg = ControlMessage.CreateVirtualDisplay(name, w, h, dpi, flags)
@@ -103,33 +124,64 @@ class DaemonControlApiImpl(
         }
     }
 
-    override suspend fun injectInput(displayId: Int, isKey: Boolean, parcelBytes: ByteArray): Result<Boolean> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-        val writer = transport.controlOutputStream() ?: return@withContext Result.failure(IOException("Control channel not connected"))
-        val msg = ControlMessage.InjectInputEvent(displayId, isKey, parcelBytes)
-        val seq = rpc.nextSequence()
-        val bytes = msg.encode(seq)
-        return@withContext try {
-            writer.write(bytes)
-            writer.flush()
-            Result.success(true)
-        } catch (e: IOException) {
-            Result.failure(e)
+    override suspend fun injectInput(displayId: Int, event: InputEvent, screenWidth: Int, screenHeight: Int): Result<Boolean> = withContext(Dispatchers.IO) {
+        val out = transport.controlOutputStream()
+        if (out == null) {
+            Log.e("DaemonControlApi", "injectInput: ROLE_CONTROL socket not connected (displayId=$displayId). Start video streaming first.")
+            return@withContext Result.failure(IllegalStateException("ROLE_CONTROL socket not connected — video must be streaming before injecting input"))
+        }
+
+        try {
+            when (event) {
+                is KeyEvent -> {
+                    val ok = transport.writeControlMessage { stream ->
+                        ScrcpyControlEncoder.encodeKeyCode(stream, event)
+                    }
+                    if (!ok) {
+                        Log.e("DaemonControlApi", "injectInput: failed to write KEYCODE to ROLE_CONTROL socket (displayId=$displayId)")
+                        Result.failure(IOException("Failed to write keycode to ROLE_CONTROL socket"))
+                    } else {
+                        Result.success(true)
+                    }
+                }
+                is MotionEvent -> {
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_SCROLL -> {
+                            val ok = transport.writeControlMessage { stream ->
+                                ScrcpyControlEncoder.encodeScroll(stream, event, screenWidth, screenHeight)
+                            }
+                            if (!ok) {
+                                Log.e("DaemonControlApi", "injectInput: failed to write SCROLL to ROLE_CONTROL socket")
+                                Result.failure(IOException("Failed to write scroll to ROLE_CONTROL socket"))
+                            } else {
+                                Result.success(true)
+                            }
+                        }
+                        else -> {
+                            val ok = transport.writeControlMessage { stream ->
+                                ScrcpyControlEncoder.encodeTouchEvent(stream, event, screenWidth, screenHeight)
+                            }
+                            if (!ok) {
+                                Log.e("DaemonControlApi", "injectInput: failed to write TOUCH to ROLE_CONTROL socket (displayId=$displayId)")
+                                Result.failure(IOException("Failed to write touch event to ROLE_CONTROL socket"))
+                            } else {
+                                Result.success(true)
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    Log.w("DaemonControlApi", "injectInput: unsupported event type ${event.javaClass.simpleName}")
+                    Result.failure(IllegalArgumentException("Unsupported InputEvent type: ${event.javaClass.simpleName}"))
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e("DaemonControlApi", "injectInput failed (displayId=$displayId)", t)
+            Result.failure(t)
         }
     }
 
-    override suspend fun switchDisplay(displayId: Int): Result<Unit> {
-        val msg = ControlMessage.SwitchDisplay(displayId)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode == 0) {
-                Result.success(Unit)
-            } else {
-                Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-            }
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
-        }
-    }
+
 
     override suspend fun exitDaemon(): Result<Unit> {
         val msg = ControlMessage.ExitDaemon
@@ -145,33 +197,7 @@ class DaemonControlApiImpl(
         }
     }
 
-    override suspend fun startVideoStream(displayId: Int): Result<Unit> {
-        val msg = ControlMessage.StartVideoStream(displayId)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode == 0) {
-                Result.success(Unit)
-            } else {
-                Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-            }
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
-        }
-    }
 
-    override suspend fun stopVideoStream(): Result<Unit> {
-        val msg = ControlMessage.StopVideoStream
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode == 0) {
-                Result.success(Unit)
-            } else {
-                Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-            }
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
-        }
-    }
 
     override suspend fun getRotation(displayId: Int): Result<Int> {
         val msg = ControlMessage.GetRotation(displayId)
