@@ -5,8 +5,8 @@ import android.util.Log
 import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.DaemonPrefs
 import com.ynk.virtualdisplay.data.PrivilegeMode
+import com.ynk.virtualdisplay.util.NetUtils
 import rikka.shizuku.Shizuku
-import rikka.shizuku.ShizukuRemoteProcess
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -15,20 +15,12 @@ class DaemonProcessController(private val context: Context) {
 
     companion object {
         private const val TAG = "DaemonProcessController"
-        private const val PORT_READY_TIMEOUT_MS = 5000L
-        private const val PORT_POLL_INTERVAL_MS = 100L
-        private const val PORT_PROBE_TIMEOUT_MS = 300
+        private const val PORT_READY_TIMEOUT_MS = 10000L
+        private const val PORT_POLL_INTERVAL_MS = 200L
+        private const val PORT_PROBE_TIMEOUT_MS = 500
     }
 
-    // Written from startDaemon/stopDaemon on Dispatchers.IO and referenced
-    // across coroutine boundaries; @Volatile for visibility. (isRunning was a
-    // dead field — never read — so it has been removed.)
     @Volatile private var process: Process? = null
-
-    // Cache of the running daemon pid so UI-facing getDaemonPid() callers don't
-    // repeatedly spawn a blocking shell pgrep. Cleared on stop/start; findDaemonPid()
-    // is still used directly by isDaemonRunning()/stopDaemon() when fresh liveness
-    // data is required.
     @Volatile private var cachedPid: Int = -1
 
     private val daemonPrefs = DaemonPrefs(context)
@@ -37,16 +29,24 @@ class DaemonProcessController(private val context: Context) {
         if (cachedPid > 0) return cachedPid
         val savedPort = daemonPrefs.getSavedPortSync()
         val port = if (savedPort > 0) savedPort else 27183
-        val pid = findDaemonPid(port)
+        val pid = findDaemonPid(port) // Get any daemon on this port for UI status
         if (pid > 0) cachedPid = pid
         return pid
     }
 
-    private fun findDaemonPid(port: Int): Int {
+    private fun findDaemonPid(port: Int, address: String? = null): Int {
         val mode = AppSettings.getPrivilegeModeSync()
         if (mode == PrivilegeMode.NONE) return -1
         return try {
-            val script = "for pid in \$(pgrep -f [c]om.genymobile.scrcpy.Server); do if cat /proc/\$pid/cmdline | grep -q \"daemon_port=$port\"; then echo \$pid; break; fi; done"
+            val portFilter = "daemon_port=$port"
+            val addrFilter = if (address != null) "daemon_bind_address=$address" else ""
+            
+            // 使用 tr \0 ' ' 将 proc cmdline 的 null 分隔符转为空格，方便 grep 跨参数匹配
+            val script = if (addrFilter.isNotEmpty()) {
+                "for pid in \$(pgrep -f [c]om.genymobile.scrcpy.Server); do if tr '\\0' ' ' < /proc/\$pid/cmdline | grep -q \"$portFilter\" && tr '\\0' ' ' < /proc/\$pid/cmdline | grep -q \"$addrFilter\"; then echo \$pid; break; fi; done"
+            } else {
+                "for pid in \$(pgrep -f [c]om.genymobile.scrcpy.Server); do if tr '\\0' ' ' < /proc/\$pid/cmdline | grep -q \"$portFilter\"; then echo \$pid; break; fi; done"
+            }
             val proc = executeCommand(arrayOf("sh", "-c", script), null, null)
             if (proc != null) {
                 val output = proc.inputStream.bufferedReader().use { it.readText() }.trim()
@@ -60,7 +60,7 @@ class DaemonProcessController(private val context: Context) {
                 -1
             }
         } catch (e: Exception) {
-            Log.e(TAG, "findDaemonPid failed for port $port", e)
+            Log.e(TAG, "findDaemonPid failed for port $port address $address", e)
             -1
         }
     }
@@ -82,32 +82,45 @@ class DaemonProcessController(private val context: Context) {
         daemonPrefs.clearSavedPid()
     }
 
-    fun startDaemon(port: Int, address: String = "127.0.0.1", password: String? = null): Boolean {
+    fun startDaemon(port: Int, address: String = NetUtils.LOCAL_HOST, password: String? = null): Boolean {
         val mode = AppSettings.getPrivilegeModeSync()
         if (mode == PrivilegeMode.NONE) {
             Log.i(TAG, "None mode, skipping startDaemon")
             return false
         }
-        val savedPid = findDaemonPid(port)
-        if (savedPid > 0) {
-            Log.i(TAG, "Daemon is already running with pid $savedPid on port $port. Reusing it.")
-            savePid(port, savedPid)
-            cachedPid = savedPid
-            return true
+        val existingPid = findDaemonPid(port)
+        if (existingPid > 0) {
+            val matchingPid = findDaemonPid(port, address)
+            if (matchingPid == existingPid) {
+                Log.i(TAG, "Daemon is already running with pid $existingPid on port $port and address $address. Reusing it.")
+                savePid(port, existingPid)
+                cachedPid = existingPid
+                return true
+            } else {
+                Log.i(TAG, "Daemon is running with pid $existingPid on port $port but different address. Stopping it to restart with address $address...")
+                stopDaemon()
+            }
         }
 
         clearSavedPid()
         cachedPid = -1
 
         return try {
-            val classpath = context.packageCodePath + ":" + context.applicationInfo.sourceDir
-            // Debug 构建开启 VERBOSE 日志便于排查；Release 构建降至 INFO 减少日志噪声。
+            val info = context.applicationInfo
+            // Construct CLASSPATH including all splits (critical for Debug builds and newer Android versions)
+            val classpath = info.sourceDir + (info.splitSourceDirs?.joinToString(":", prefix = ":") ?: "")
+            val serverVersion = com.genymobile.scrcpy.BuildConfig.VERSION_NAME
+            
+            Log.i(TAG, "Starting daemon: classpath=$classpath, version=$serverVersion, port=$port")
+            
             val logLevel = if (com.ynk.virtualdisplay.BuildConfig.DEBUG) "VERBOSE" else "INFO"
             val passwordArg = if (!password.isNullOrEmpty()) " daemon_secret_token='${password.replace("'", "'\\''")}'" else ""
+            
+            // Note: removed redirection to /dev/null to allow server logs to reach logcat
             val cmd = arrayOf(
                 "sh",
                 "-c",
-                "export CLASSPATH=$classpath && nohup app_process / com.genymobile.scrcpy.Server ${com.genymobile.scrcpy.BuildConfig.VERSION_NAME} tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false log_level=$logLevel daemon=true daemon_port=$port daemon_bind_address=$address$passwordArg >/dev/null 2>&1 &"
+                "export CLASSPATH=\"$classpath\" && nohup /system/bin/app_process / com.genymobile.scrcpy.Server $serverVersion tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false log_level=$logLevel daemon=true daemon_port=$port daemon_bind_address=$address$passwordArg &"
             )
 
             val envList = mutableListOf<String>()
@@ -122,19 +135,8 @@ class DaemonProcessController(private val context: Context) {
             val remoteProcess = executeCommand(cmd, env, null)
             if (remoteProcess != null) {
                 process = remoteProcess
-
-                // Wait until the daemon's ServerSocket actually accepts connections.
-                // The previous fixed Thread.sleep(800) both wasted time when the port
-                // was already up and was often insufficient (app_process JVM boot can
-                // take >1s), forcing transport.connect into retry backoff. Polling the
-                // TCP port returns as soon as the daemon is ready and yields a precise
-                // "not listening" error otherwise. The probe connects and closes without
-                // writing a role byte; the server's accept loop treats this as an EOF
-                // on readSocketRole and continues (harmless one-line warning).
                 val ready = waitForPort(address, port, PORT_READY_TIMEOUT_MS)
                 if (ready) {
-                    // Best-effort pid resolution: pgrep may briefly miss the process
-                    // (cmdline not populated yet), but that does not affect connectivity.
                     val activePid = findDaemonPid(port)
                     if (activePid > 0) {
                         Log.i(TAG, "Daemon started successfully with pid $activePid on port $port")
@@ -253,7 +255,7 @@ class DaemonProcessController(private val context: Context) {
                         }
                     }
                     if (dir != null) pb.directory(java.io.File(dir))
-                    pb.redirectErrorStream(true) // 合并错误流
+                    pb.redirectErrorStream(true)
                     pb.start()
                 } catch (e: Exception) {
                     Log.e(TAG, "Root execution failed: ${e.message}", e)

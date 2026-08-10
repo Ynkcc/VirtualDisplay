@@ -5,6 +5,8 @@ import android.view.Surface
 import com.ynk.virtualdisplay.net.DaemonTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -12,17 +14,20 @@ import java.io.IOException
 
 class VideoStreamController(
     private val transport: DaemonTransport,
+    private val controlApi: com.ynk.virtualdisplay.rpc.DaemonControlApi,
     private val scope: CoroutineScope
 ) {
     companion object {
         private const val TAG = "VideoStreamController"
         private const val DEFAULT_WIDTH = 1920
         private const val DEFAULT_HEIGHT = 1080
+        private const val PING_INTERVAL_MS = 2000L
     }
 
     private val mutex = Mutex()
     private var decoder: H264StreamDecoder? = null
     private var tracker: PerformanceTracker? = null
+    private var pingJob: kotlinx.coroutines.Job? = null
 
     var onVideoConfig: ((codecLabel: String, width: Int, height: Int) -> Unit)? = null
     var onPerformanceStats: ((String) -> Unit)? = null
@@ -101,7 +106,22 @@ class VideoStreamController(
         }
 
         Log.i(TAG, "VideoStreamController started successfully for display $displayId (surface bound=${surface != null && surface.isValid})")
+        
+        startPingLoop()
         Result.success(Unit)
+    }
+
+    private fun startPingLoop() {
+        pingJob?.cancel()
+        pingJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                val result = controlApi.ping()
+                result.onSuccess { rtt ->
+                    tracker?.recordRtt(rtt.toDouble())
+                }
+                kotlinx.coroutines.delay(PING_INTERVAL_MS)
+            }
+        }
     }
 
     suspend fun stop() = mutex.withLock {
@@ -110,6 +130,8 @@ class VideoStreamController(
 
     private suspend fun stopInternal() {
         Log.i(TAG, "Stopping video stream...")
+        pingJob?.cancel()
+        pingJob = null
         // Post-b7aef962: stopVideoStream (210) removed. Video server stops
         // automatically when the ROLE_VIDEO socket closes. 先断开 Scrcpy 子信道使
         // input worker 阻塞的 read() 抛 SocketException 退出，从而下面的

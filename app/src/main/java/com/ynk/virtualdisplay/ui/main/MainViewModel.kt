@@ -11,6 +11,7 @@ import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.domain.DisplayInteractor
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import com.ynk.virtualdisplay.manager.ShizukuManager
+import com.ynk.virtualdisplay.util.NetUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -149,7 +150,7 @@ class MainViewModel(
     private fun checkPrivilegeAndBind() {
         val mode = AppSettings.getPrivilegeModeSync()
         val node = AppSettings.getCurrentServerNodeSync()
-        val isLocal = node.host == "127.0.0.1" || node.host == "localhost"
+        val isLocal = node.host == NetUtils.LOCAL_HOST || node.host == "localhost"
 
         checkAndInitDeviceMetrics()
 
@@ -196,7 +197,7 @@ class MainViewModel(
             AppSettings.removeServerNode(appContext, node)
             val current = _uiState.value.currentServerNode
             if (current.host == node.host && current.port == node.port) {
-                val localNode = com.ynk.virtualdisplay.data.ServerNode("本机", "127.0.0.1", 27183, "")
+                val localNode = com.ynk.virtualdisplay.data.ServerNode("本机", NetUtils.LOCAL_HOST, 27183, "")
                 selectServerNode(localNode)
             }
         }

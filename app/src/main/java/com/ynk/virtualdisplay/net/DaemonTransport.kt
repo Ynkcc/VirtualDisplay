@@ -19,19 +19,12 @@ import java.net.Socket
 class DaemonTransport {
     companion object {
         private const val TAG = "DaemonTransport"
-        // Connect timeout (ms) for Socket.connect(). Applies to initial
-        // negotiation socket + per-display control/video role sockets.
-        private const val CONNECT_TIMEOUT_MS = 1000
-        // Socket read timeout (ms) for socket input streams. Protects the
-        // negotiation message loop, CONFIGURE_SESSION synchronous read,
-        // and per-role socket reads from blocking forever on half-open
-        // connections.
+        // Connect timeout (ms) for Socket.connect(). Increased for cross-device stability.
+        private const val CONNECT_TIMEOUT_MS = 3000
+        // Socket read timeout (ms) for socket input streams.
         private const val SOCKET_READ_TIMEOUT_MS = 30_000
-        // StartDaemon already polls the TCP port to readiness, so the first attempt
-        // normally succeeds. The retry loop only kicks in for the rare race where the
-        // daemon dies between probe and connect; a smaller base delay recovers faster
-        // on localhost (connection-refused returns in ~10ms, not the 1s connect timeout).
-        private const val RETRY_BASE_DELAY_MS = 50L
+        // Initial delay for retries.
+        private const val RETRY_BASE_DELAY_MS = 100L
     }
 
     // Accessed across coroutines on Dispatchers.IO: connect()/disconnect()

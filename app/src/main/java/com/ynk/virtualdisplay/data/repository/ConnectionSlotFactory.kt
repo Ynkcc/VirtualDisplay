@@ -39,7 +39,7 @@ class ConnectionSlotFactory(
             Dispatchers.Main + SupervisorJob() +
                 ExceptionUtils.coroutineExceptionHandler("VideoStream[${node.uniqueKey()}]")
         )
-        val videoController = VideoStreamController(transport, videoScope)
+        val videoController = VideoStreamController(transport, controlApi, videoScope)
 
         // 本机节点才持有进程控制权
         val slotProcessDataSource = if (node.isLocal) processDataSource else null

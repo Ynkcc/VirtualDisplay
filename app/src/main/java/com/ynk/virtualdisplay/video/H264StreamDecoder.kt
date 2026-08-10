@@ -207,6 +207,9 @@ class H264StreamDecoder(
                     Log.i(TAG, "First frame received: size=${frame.size} pts=${frame.ptsUs} isConfig=${frame.isConfig} isKeyFrame=${frame.isKeyFrame}")
                 }
                 tracker.recordReceived(frame.size)
+                if (!frame.isConfig && frame.ptsUs >= 0L) {
+                    tracker.recordFrameReceived(frame.ptsUs)
+                }
 
                 // Periodic stats log every 3s
                 val nowMs = System.currentTimeMillis()

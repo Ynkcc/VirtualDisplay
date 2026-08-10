@@ -28,17 +28,38 @@ class PerformanceTracker {
     @Volatile private var currentBitrateMbps: Double = 0.0
     @Volatile private var currentReceivedFps: Double = 0.0
 
+    @Volatile private var rttEwmaMs: Double = 0.0
+    @Volatile private var networkLatencyMs: Double = 0.0
+    @Volatile private var queueLatencyEwmaMs: Double = 0.0
+    private val frameReceiveTimeNsByPtsUs = ConcurrentHashMap<Long, Long>()
+
     var onPerformanceStats: ((String) -> Unit)? = null
 
     private fun updateEwma(current: Double, sample: Double, alpha: Double = 0.2): Double =
         if (current == 0.0) sample else (current * (1.0 - alpha)) + (sample * alpha)
 
+    fun recordRtt(rttMs: Double) {
+        rttEwmaMs = updateEwma(rttEwmaMs, rttMs, 0.1)
+        // Estimate network latency as half RTT
+        networkLatencyMs = rttEwmaMs / 2.0
+    }
+
+    fun recordFrameReceived(ptsUs: Long) {
+        frameReceiveTimeNsByPtsUs[ptsUs] = System.nanoTime()
+    }
+
     fun recordEnqueue(ptsUs: Long) {
         inputEnqueueNsByPtsUs[ptsUs] = System.nanoTime()
+        val receiveNs = frameReceiveTimeNsByPtsUs.get(ptsUs)
+        if (receiveNs != null) {
+            val queueLatency = (System.nanoTime() - receiveNs) / 1_000_000.0
+            queueLatencyEwmaMs = updateEwma(queueLatencyEwmaMs, queueLatency, 0.1)
+        }
     }
 
     fun recordDecode(ptsUs: Long) {
         val enqueueNs = inputEnqueueNsByPtsUs.remove(ptsUs)
+        frameReceiveTimeNsByPtsUs.remove(ptsUs) // cleanup
         if (enqueueNs != null) {
             val latencyMs = (System.nanoTime() - enqueueNs) / 1_000_000.0
             decodeLatencyEwmaMs = updateEwma(decodeLatencyEwmaMs, latencyMs.coerceIn(0.0, 500.0), 0.1)
@@ -110,13 +131,15 @@ class PerformanceTracker {
     }
 
     fun getStatsString(): String {
+        val totalLatency = networkLatencyMs + queueLatencyEwmaMs + decodeLatencyEwmaMs + renderLatencyEwmaMs
+        val congestion = (inputEnqueueNsByPtsUs.size).coerceAtLeast(0)
         return buildString {
             append("分辨率: ${actualWidth}x${actualHeight} | 帧率: %.1f FPS".format(currentFps)).appendLine()
             append("码率: %.2f Mbps".format(currentBitrateMbps)).appendLine()
-            append("解码延迟: %.1f ms".format(decodeLatencyEwmaMs)).appendLine()
-            append("渲染延迟: %.1f ms".format(renderLatencyEwmaMs)).appendLine()
-            append("丢帧数量: ${droppedOutputFrames.get()}").appendLine()
-            append("抖动: %.1f ms".format(pacingVarianceEwmaMs))
+            append("总延迟: %.1f ms (网络: %.1f ms)".format(totalLatency, networkLatencyMs)).appendLine()
+            append("队列/解码: %.1f / %.1f ms".format(queueLatencyEwmaMs, decodeLatencyEwmaMs)).appendLine()
+            append("渲染延迟: %.1f ms | 抖动: %.1f ms".format(renderLatencyEwmaMs, pacingVarianceEwmaMs)).appendLine()
+            append("阻塞窗口: $congestion 帧 | 丢帧: ${droppedOutputFrames.get()}").appendLine()
         }
     }
 

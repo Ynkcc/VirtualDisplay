@@ -43,6 +43,7 @@ interface DaemonControlApi {
     suspend fun freezeRotation(displayId: Int, rotation: Int): Result<Unit>
     suspend fun thawRotation(displayId: Int): Result<Unit>
     suspend fun isRotationFrozen(displayId: Int): Result<Boolean>
+    suspend fun ping(): Result<Long>
 }
 
 class DaemonControlApiImpl(
@@ -269,6 +270,17 @@ class DaemonControlApiImpl(
             Result.success(frozen != 0)
         } else {
             Result.failure(IllegalStateException((resp as? DeviceMessage.GenericResponse)?.message ?: "Unexpected response: $resp"))
+        }
+    }
+
+    override suspend fun ping(): Result<Long> {
+        val start = System.currentTimeMillis()
+        val msg = ControlMessage.Ping
+        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Ping timeout"))
+        return if (resp is DeviceMessage.GenericResponse && resp.statusCode == 0) {
+            Result.success(System.currentTimeMillis() - start)
+        } else {
+            Result.failure(IllegalStateException("Ping failed"))
         }
     }
 }

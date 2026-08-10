@@ -145,6 +145,11 @@ sealed class ControlMessage {
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {}
     }
 
+    object Ping : ControlMessage() {
+        override val type: Int = TYPE_PING
+        override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {}
+    }
+
     protected fun buildMessage(type: Int, sequence: Long, block: DataOutputStream.() -> Unit): ByteArray {
         val baos = ByteArrayOutputStream()
         DataOutputStream(baos).use { dos ->
@@ -179,6 +184,7 @@ sealed class ControlMessage {
         const val TYPE_CONFIGURE_SESSION = 216
         const val TYPE_LAUNCH_HOME = 217
         const val TYPE_LIST_APPS = 218
+        const val TYPE_PING = 219
     }
 }
 

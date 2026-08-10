@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.ui.display.DisplayActivity
+import com.ynk.virtualdisplay.util.NetUtils
 import com.ynk.virtualdisplay.ui.main.MainIntent
 import com.ynk.virtualdisplay.ui.main.MainViewModel
 import com.ynk.virtualdisplay.ui.components.DisplayItem
@@ -123,7 +124,18 @@ fun VirtualDisplayScreen(
                 )
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    
+                    IconButton(
+                        onClick = { viewModel.handleIntent(MainIntent.RefreshDisplays) },
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                            .size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Refresh",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
 
@@ -182,7 +194,7 @@ fun VirtualDisplayScreen(
                         onDismissRequest = { dropdownExpanded = false }
                     ) {
                         uiState.serverNodes.forEach { node ->
-                            val isLocalNode = node.host == "127.0.0.1" || node.host == "localhost" || node.name == "本机"
+                            val isLocalNode = node.host == NetUtils.LOCAL_HOST || node.host == "localhost" || node.name == "本机"
                             DropdownMenuItem(
                                 text = {
                                     Row(

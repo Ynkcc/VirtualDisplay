@@ -17,6 +17,7 @@ import com.ynk.virtualdisplay.rpc.DaemonRpc
 import com.ynk.virtualdisplay.rpc.DaemonRpcState
 import com.ynk.virtualdisplay.util.ExceptionUtils
 import com.ynk.virtualdisplay.video.VideoStreamController
+import com.ynk.virtualdisplay.util.NetUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -274,6 +275,7 @@ class DaemonDisplayRepository(
 
                     // 启动守护进程 → Process DataSource
                     val started = withContext(Dispatchers.IO) {
+                        // 尊重用户在 UI 填写的地址（例如 0.0.0.0），不再在 Repository 层做强制修改
                         processDataSource.startDaemon(port, host, password)
                     }
                     if (!started) {
@@ -292,8 +294,17 @@ class DaemonDisplayRepository(
             }
 
             // Post-b7aef962: transport.connect performs the full 2-stage handshake
-            val connectHost = if (host == "0.0.0.0") "127.0.0.1" else host
-            val connected = transport.connect(connectHost, port, 5000, secretToken = password?.takeIf { it.isNotEmpty() })
+            // 建立实际连接服务端前，检查ip为0.0.0.0替换为127.0.0.1，中间一律使用传递的ip即便是0.0.0.0
+            val connectHost = if (host == NetUtils.ANY_HOST) NetUtils.LOCAL_HOST else host
+            val connected = try {
+                transport.connect(connectHost, port, 5000, secretToken = password?.takeIf { it.isNotEmpty() })
+            } catch (t: Throwable) {
+                val err = com.ynk.virtualdisplay.util.NetUtils.getFriendlyErrorMessage(t)
+                _connectionError.value = err
+                _connectionStatus.value = ConnectionStatus.ERROR
+                return Result.failure(t)
+            }
+
             if (connected) {
                 rpc.startMessageLoop(scope)
                 _connectionStatus.value = ConnectionStatus.CONNECTED
@@ -301,14 +312,14 @@ class DaemonDisplayRepository(
                 refreshManagedDisplays()
                 Result.success(Unit)
             } else {
-                val err = "Failed to connect to daemon port $port"
+                val err = "连接失败：无法连接到 ${connectHost}:${port}，请确认服务端已启动且防火墙已放行。"
                 _connectionError.value = err
                 _connectionStatus.value = ConnectionStatus.ERROR
                 Result.failure(IllegalStateException(err))
             }
         } catch (e: Exception) {
             Log.e(TAG, "connectInternal failed", e)
-            val err = e.message ?: "Unknown error"
+            val err = com.ynk.virtualdisplay.util.NetUtils.getFriendlyErrorMessage(e)
             _connectionError.value = err
             _connectionStatus.value = ConnectionStatus.ERROR
             Result.failure(e)

@@ -21,6 +21,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ynk.virtualdisplay.BuildConfig
+import com.ynk.virtualdisplay.util.NetUtils
 import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.ui.main.MainViewModel
@@ -42,7 +43,7 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
 
     val serverPort by AppSettings.serverPortFlow(context).collectAsState(initial = 27183)
-    val serverHost by AppSettings.serverHostFlow(context).collectAsState(initial = "127.0.0.1")
+    val serverHost by AppSettings.serverHostFlow(context).collectAsState(initial = NetUtils.LOCAL_HOST)
     val serverPassword by AppSettings.serverPasswordFlow(context).collectAsState(initial = "")
     val showPerformanceStats by AppSettings.showPerformanceStatsFlow(context).collectAsState(initial = true)
     val captureBack by AppSettings.captureBackFlow(context).collectAsState(initial = false)
@@ -389,7 +390,7 @@ fun SettingsScreen(
                                 }
                             },
                             label = { Text("监听地址") },
-                            placeholder = { Text("127.0.0.1") },
+                            placeholder = { Text(NetUtils.LOCAL_HOST) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -442,13 +443,13 @@ fun SettingsScreen(
 
                         val addressesStr = remember(serverHost, localIps) {
                             val list = mutableListOf<String>()
-                            if (serverHost == "0.0.0.0") {
+                            if (serverHost == NetUtils.ANY_HOST) {
                                 list.addAll(localIps)
                             } else {
                                 list.add(serverHost)
                             }
-                            if (!list.contains("127.0.0.1")) {
-                                list.add("127.0.0.1")
+                            if (!list.contains(NetUtils.LOCAL_HOST)) {
+                                list.add(NetUtils.LOCAL_HOST)
                             }
                             list.joinToString(", ")
                         }
@@ -488,6 +489,7 @@ fun SettingsScreen(
                                 connectionStatus == ConnectionStatus.CONNECTED -> "已连接" to Color(0xFF26A69A)
                                 connectionStatus == ConnectionStatus.BINDING -> "启动中..." to Color(0xFFFFB74D)
                                 connectionStatus == ConnectionStatus.RECONNECTING -> "重连中..." to Color(0xFFFFB74D)
+                                connectionStatus == ConnectionStatus.ERROR -> "启动失败" to Color(0xFFEF5350)
                                 else -> "已停止" to Color(0xFFEF5350)
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {

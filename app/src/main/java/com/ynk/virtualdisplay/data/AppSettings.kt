@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import com.ynk.virtualdisplay.util.NetUtils
 import com.ynk.virtualdisplay.data.model.SavedDisplay
 
 enum class PrivilegeMode {
@@ -36,7 +37,7 @@ data class ServerNode(
     val password: String = ""
 ) {
     /** 是否为本机节点（可启动/停止守护进程） */
-    val isLocal: Boolean get() = host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0"
+    val isLocal: Boolean get() = host == NetUtils.LOCAL_HOST || host == "localhost" || host == NetUtils.ANY_HOST
 
     fun uniqueKey(): String {
         return "${host.replace(".", "_")}_$port"
@@ -102,7 +103,7 @@ object AppSettings {
     private val _privilegeModeCache = MutableStateFlow(PrivilegeMode.SHIZUKU)
     val privilegeModeCache: StateFlow<PrivilegeMode> = _privilegeModeCache
 
-    private val _currentServerNodeCache = MutableStateFlow(ServerNode("本机", "127.0.0.1", 27183, ""))
+    private val _currentServerNodeCache = MutableStateFlow(ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""))
     val currentServerNodeCache: StateFlow<ServerNode> = _currentServerNodeCache
 
     private val _autoStartServerCache = MutableStateFlow(true)
@@ -134,9 +135,18 @@ object AppSettings {
                 }
 
                 // currentServerNode 仅用于 per-node 数据隔离（flags、显示器存储等）
-                // 实际连接地址/端口永远从用户配置项（serverHostKey/serverPortKey）读取
+                // 实际连接地址/端口如果为“本机”，则从用户配置项（serverHostKey/serverPortKey）读取
+                val host = prefs[serverHostKey] ?: NetUtils.LOCAL_HOST
+                val port = prefs[serverPortKey] ?: 27183
+                val pwd = prefs[serverPasswordKey] ?: ""
+
                 val nodeStr = prefs[currentServerNodeKey] ?: ""
-                _currentServerNodeCache.value = ServerNode.fromSerializedString(nodeStr) ?: ServerNode("本机", "127.0.0.1", 27183, "")
+                val savedNode = ServerNode.fromSerializedString(nodeStr)
+                _currentServerNodeCache.value = if (savedNode == null || savedNode.name == "本机") {
+                    ServerNode("本机", host, port, pwd)
+                } else {
+                    savedNode
+                }
             }
         }
     }
@@ -157,12 +167,12 @@ object AppSettings {
 
     fun serverHostFlow(context: Context): Flow<String> {
         return context.applicationContext.dataStore.data.map { prefs ->
-            prefs[serverHostKey] ?: "127.0.0.1"
+            prefs[serverHostKey] ?: NetUtils.LOCAL_HOST
         }
     }
 
     suspend fun getServerHost(context: Context): String {
-        return context.applicationContext.dataStore.data.first()[serverHostKey] ?: "127.0.0.1"
+        return context.applicationContext.dataStore.data.first()[serverHostKey] ?: NetUtils.LOCAL_HOST
     }
 
     suspend fun setServerHost(context: Context, host: String) {
@@ -395,22 +405,48 @@ object AppSettings {
 
     fun serverNodesFlow(context: Context): Flow<List<ServerNode>> {
         return context.applicationContext.dataStore.data.map { prefs ->
+            val host = prefs[serverHostKey] ?: NetUtils.LOCAL_HOST
+            val port = prefs[serverPortKey] ?: 27183
+            val pwd = prefs[serverPasswordKey] ?: ""
+            
             val raw = prefs[serverNodesKey] ?: ""
-            if (raw.isEmpty()) {
-                listOf(ServerNode("本机", "127.0.0.1", 27183, ""))
+            val list = if (raw.isEmpty()) {
+                mutableListOf(ServerNode("本机", host, port, pwd))
             } else {
-                raw.split(",").mapNotNull { ServerNode.fromSerializedString(it) }
+                raw.split(",").mapNotNull { ServerNode.fromSerializedString(it) }.toMutableList()
             }
+            
+            // 始终确保“本机”节点存在且与当前全局网络配置同步
+            val localIdx = list.indexOfFirst { it.name == "本机" }
+            if (localIdx >= 0) {
+                list[localIdx] = list[localIdx].copy(host = host, port = port, password = pwd)
+            } else {
+                list.add(0, ServerNode("本机", host, port, pwd))
+            }
+            list
         }
     }
 
     suspend fun getServerNodes(context: Context): List<ServerNode> {
-        val raw = context.applicationContext.dataStore.data.first()[serverNodesKey] ?: ""
-        return if (raw.isEmpty()) {
-            listOf(ServerNode("本机", "127.0.0.1", 27183, ""))
+        val prefs = context.applicationContext.dataStore.data.first()
+        val host = prefs[serverHostKey] ?: NetUtils.LOCAL_HOST
+        val port = prefs[serverPortKey] ?: 27183
+        val pwd = prefs[serverPasswordKey] ?: ""
+
+        val raw = prefs[serverNodesKey] ?: ""
+        val list = if (raw.isEmpty()) {
+            mutableListOf(ServerNode("本机", host, port, pwd))
         } else {
-            raw.split(",").mapNotNull { ServerNode.fromSerializedString(it) }
+            raw.split(",").mapNotNull { ServerNode.fromSerializedString(it) }.toMutableList()
         }
+
+        val localIdx = list.indexOfFirst { it.name == "本机" }
+        if (localIdx >= 0) {
+            list[localIdx] = list[localIdx].copy(host = host, port = port, password = pwd)
+        } else {
+            list.add(0, ServerNode("本机", host, port, pwd))
+        }
+        return list
     }
 
     suspend fun addServerNode(context: Context, node: ServerNode) {

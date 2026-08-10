@@ -2,6 +2,7 @@ package com.ynk.virtualdisplay.ui.main
 
 import com.ynk.virtualdisplay.data.model.ShizukuState
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
+import com.ynk.virtualdisplay.util.NetUtils
 
 /**
  * 虚拟显示器元数据模型
@@ -42,7 +43,7 @@ data class MainUiState(
     // 权限与设备切换状态
     val privilegeMode: com.ynk.virtualdisplay.data.PrivilegeMode = com.ynk.virtualdisplay.data.PrivilegeMode.SHIZUKU,
     val serverNodes: List<com.ynk.virtualdisplay.data.ServerNode> = emptyList(),
-    val currentServerNode: com.ynk.virtualdisplay.data.ServerNode = com.ynk.virtualdisplay.data.ServerNode("本机", "127.0.0.1", 27183, ""),
+    val currentServerNode: com.ynk.virtualdisplay.data.ServerNode = com.ynk.virtualdisplay.data.ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""),
     val rootAvailable: Boolean = false,
     val rootChecking: Boolean = false
 )

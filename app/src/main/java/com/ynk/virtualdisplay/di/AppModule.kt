@@ -51,7 +51,7 @@ val appModule = module {
     // 否则会不可逆地破坏 VideoStreamController 等所有使用者。
     single { CoroutineScope(Dispatchers.Main + SupervisorJob() + ExceptionUtils.coroutineExceptionHandler("VideoStreamController")) }
 
-    single { VideoStreamController(get(), get()) }
+    single { VideoStreamController(get(), get(), get()) }
 
     // === Data 层 DataSource ===
     // Local：  AppSettings / DaemonPrefs 本地配置读写

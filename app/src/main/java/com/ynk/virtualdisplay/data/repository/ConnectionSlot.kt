@@ -147,6 +147,7 @@ class ConnectionSlot(
                         transport.connect(host, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
                     } catch (t: Throwable) {
                         Log.w(TAG, "[${node.uniqueKey()}] transport.connect threw", t)
+                        _connectionError.value = com.ynk.virtualdisplay.util.NetUtils.getFriendlyErrorMessage(t)
                         false
                     }
                     if (connected) {
@@ -216,19 +217,28 @@ class ConnectionSlot(
                     _daemonPid.value = -1
                 }
 
-                val connected = transport.connect(host, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
+                val connected = try {
+                    transport.connect(host, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
+                } catch (t: Throwable) {
+                    val err = com.ynk.virtualdisplay.util.NetUtils.getFriendlyErrorMessage(t)
+                    _connectionError.value = err
+                    _connectionStatus.value = ConnectionStatus.ERROR
+                    false
+                }
                 if (connected) {
                     rpc.startMessageLoop(scope)
                     _connectionStatus.value = ConnectionStatus.CONNECTED
                     _connectionError.value = null
                     refreshManagedDisplays()
-                } else {
-                    _connectionError.value = "Failed to connect to daemon port"
+                } else if (_connectionError.value == null) {
+                    val err = "连接失败：无法建立到 ${host}:${port} 的连接。"
+                    _connectionError.value = err
                     _connectionStatus.value = ConnectionStatus.ERROR
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "[${node.uniqueKey()}] bindService failed", e)
-                _connectionError.value = e.message ?: "Unknown error"
+                val err = com.ynk.virtualdisplay.util.NetUtils.getFriendlyErrorMessage(e)
+                _connectionError.value = err
                 _connectionStatus.value = ConnectionStatus.ERROR
             }
         }
