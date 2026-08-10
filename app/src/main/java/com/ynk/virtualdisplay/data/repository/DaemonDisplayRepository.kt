@@ -230,32 +230,37 @@ class DaemonDisplayRepository(
         isBound = true
 
         scope.launch {
-            try {
-                _connectionStatus.value = ConnectionStatus.BINDING
+            val currentNode = AppSettings.getCurrentServerNodeSync()
+            val (host, port, password) = if (currentNode.name == "本机") {
+                Triple(
+                    settingsDataSource.getServerHost(),
+                    settingsDataSource.getServerPort(),
+                    settingsDataSource.getServerPassword()
+                )
+            } else {
+                Triple(
+                    currentNode.host,
+                    currentNode.port,
+                    currentNode.password
+                )
+            }
 
-                val currentNode = AppSettings.getCurrentServerNodeSync()
-                val (host, port, password) = if (currentNode.name == "本机") {
-                    Triple(
-                        settingsDataSource.getServerHost(),
-                        settingsDataSource.getServerPort(),
-                        settingsDataSource.getServerPassword()
-                    )
-                } else {
-                    Triple(
-                        currentNode.host,
-                        currentNode.port,
-                        currentNode.password
-                    )
-                }
+            connectInternal(currentNode.name == "本机", host, port, password)
+        }
+    }
 
-                val isLocal = currentNode.name == "本机"
+    private suspend fun connectInternal(isLocal: Boolean, host: String, port: Int, password: String?): Result<Unit> {
+        return try {
+            _connectionStatus.value = ConnectionStatus.BINDING
+
+            if (isLocal) {
                 val privilegeMode = AppSettings.getPrivilegeModeSync()
-
-                if (isLocal && privilegeMode != PrivilegeMode.NONE) {
+                if (privilegeMode != PrivilegeMode.NONE) {
                     if (privilegeMode == PrivilegeMode.SHIZUKU && !shizukuManager.isAvailable()) {
-                        _connectionError.value = "Shizuku is not available"
+                        val err = "Shizuku is not available"
+                        _connectionError.value = err
                         _connectionStatus.value = ConnectionStatus.ERROR
-                        return@launch
+                        return Result.failure(IllegalStateException(err))
                     }
 
                     // 检查自动启动选项
@@ -264,7 +269,7 @@ class DaemonDisplayRepository(
                     if (!autoStart && !isRunning) {
                         Log.i(TAG, "autoStart is false and daemon not running, skipping startDaemon and connection")
                         _connectionStatus.value = ConnectionStatus.DISCONNECTED
-                        return@launch
+                        return Result.success(Unit)
                     }
 
                     // 启动守护进程 → Process DataSource
@@ -272,37 +277,41 @@ class DaemonDisplayRepository(
                         processDataSource.startDaemon(port, host, password)
                     }
                     if (!started) {
-                        _connectionError.value = "Failed to start daemon process"
+                        val err = "Failed to start daemon process"
+                        _connectionError.value = err
                         _connectionStatus.value = ConnectionStatus.ERROR
-                        return@launch
+                        return Result.failure(IllegalStateException(err))
                     }
 
                     _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
                 } else {
                     _daemonPid.value = -1
                 }
-
-                // Post-b7aef962: transport.connect performs the full 2-stage handshake
-                // (ROLE_NEGOTIATION → sessionId+deviceName → CONFIGURE_SESSION with
-                // declared roles) as well as optional secret_token auth. Defaults
-                // (secretToken=null, rolesMask=0 = "declare-on-bind" per-socket roles)
-                // match the server's default configuration.
-                val connectHost = if (host == "0.0.0.0") "127.0.0.1" else host
-                val connected = transport.connect(connectHost, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
-                if (connected) {
-                    rpc.startMessageLoop(scope)
-                    _connectionStatus.value = ConnectionStatus.CONNECTED
-                    _connectionError.value = null
-                    refreshManagedDisplays()
-                } else {
-                    _connectionError.value = "Failed to connect to daemon port"
-                    _connectionStatus.value = ConnectionStatus.ERROR
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "bindService failed", e)
-                _connectionError.value = e.message ?: "Unknown error"
-                _connectionStatus.value = ConnectionStatus.ERROR
+            } else {
+                _daemonPid.value = -1
             }
+
+            // Post-b7aef962: transport.connect performs the full 2-stage handshake
+            val connectHost = if (host == "0.0.0.0") "127.0.0.1" else host
+            val connected = transport.connect(connectHost, port, 5000, secretToken = password?.takeIf { it.isNotEmpty() })
+            if (connected) {
+                rpc.startMessageLoop(scope)
+                _connectionStatus.value = ConnectionStatus.CONNECTED
+                _connectionError.value = null
+                refreshManagedDisplays()
+                Result.success(Unit)
+            } else {
+                val err = "Failed to connect to daemon port $port"
+                _connectionError.value = err
+                _connectionStatus.value = ConnectionStatus.ERROR
+                Result.failure(IllegalStateException(err))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "connectInternal failed", e)
+            val err = e.message ?: "Unknown error"
+            _connectionError.value = err
+            _connectionStatus.value = ConnectionStatus.ERROR
+            Result.failure(e)
         }
     }
 
@@ -537,23 +546,38 @@ class DaemonDisplayRepository(
     }
 
     override suspend fun startDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            // 已处于连接状态，不打断现有连接
-            if (_connectionStatus.value == ConnectionStatus.CONNECTED) {
-                Log.d(TAG, "startDaemon: already connected, skipping")
-                return@runCatching
+        // 已处于连接状态，不打断现有连接
+        if (_connectionStatus.value == ConnectionStatus.CONNECTED) {
+            Log.d(TAG, "startDaemon: already connected, skipping")
+            return@withContext Result.success(Unit)
+        }
+        // 先完整停止（若当前已绑定但未连接）
+        if (isBound) {
+            val job = withContext(Dispatchers.Main) {
+                isBound = false
+                launchCleanupOnce(killDaemon = false)
             }
-            // 先完整停止（若当前已绑定但未连接）
-            if (isBound) {
-                val job = withContext(Dispatchers.Main) {
-                    isBound = false
-                    launchCleanupOnce(killDaemon = false)
-                }
-                withTimeoutOrNull(1000) { job.join() }
-            }
-            withContext(Dispatchers.Main) {
-                bindService()
-            }
+            withTimeoutOrNull(1000) { job.join() }
+        }
+
+        val currentNode = AppSettings.getCurrentServerNodeSync()
+        val (host, port, password) = if (currentNode.name == "本机") {
+            Triple(
+                settingsDataSource.getServerHost(),
+                settingsDataSource.getServerPort(),
+                settingsDataSource.getServerPassword()
+            )
+        } else {
+            Triple(
+                currentNode.host,
+                currentNode.port,
+                currentNode.password
+            )
+        }
+
+        withContext(Dispatchers.Main) {
+            isBound = true
+            connectInternal(currentNode.name == "本机", host, port, password)
         }
     }
 

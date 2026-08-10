@@ -237,16 +237,26 @@ class DaemonProcessController(private val context: Context) {
             }
             PrivilegeMode.ROOT -> {
                 try {
-                    val finalCmd = if (cmd.size >= 2 && cmd[0] == "sh" && cmd[1] == "-c") {
+                    val suCmd = if (cmd.size >= 2 && cmd[0] == "sh" && cmd[1] == "-c") {
                         arrayOf("su", "-c", cmd[2])
-                    } else if (cmd.isNotEmpty() && cmd[0] == "kill") {
-                        arrayOf("su", "-c", cmd.joinToString(" "))
                     } else {
                         arrayOf("su", "-c", cmd.joinToString(" "))
                     }
-                    Runtime.getRuntime().exec(finalCmd, env, dir?.let { java.io.File(it) })
+                    val pb = ProcessBuilder(*suCmd)
+                    if (env != null) {
+                        val pbEnv = pb.environment()
+                        env.forEach { e ->
+                            val parts = e.split("=", limit = 2)
+                            if (parts.size == 2) {
+                                pbEnv[parts[0]] = parts[1]
+                            }
+                        }
+                    }
+                    if (dir != null) pb.directory(java.io.File(dir))
+                    pb.redirectErrorStream(true) // 合并错误流
+                    pb.start()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Root execution failed", e)
+                    Log.e(TAG, "Root execution failed: ${e.message}", e)
                     null
                 }
             }

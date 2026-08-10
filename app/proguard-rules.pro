@@ -5,6 +5,9 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
+# Scrcpy Server
+-keep class com.genymobile.scrcpy.** { *; }
+
 # Shizuku
 -keep class dev.rikka.shizuku.** { *; }
 

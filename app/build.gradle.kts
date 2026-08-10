@@ -25,10 +25,13 @@ android {
         targetSdk = 36
         resConfigs("zh", "en")
 
-        // 自动计算版本号与获取构建信息
         val commitCount = providers.exec {
             commandLine("git", "rev-list", "--count", "HEAD")
         }.standardOutput.asText.map { it.trim().toIntOrNull() ?: 1 }.getOrElse(1)
+
+        val gitDescribe = providers.exec {
+            commandLine("git", "describe", "--tags", "HEAD")
+        }.standardOutput.asText.map { it.trim() }.getOrElse("v1.0.0")
 
         val gitHash = providers.exec {
             commandLine("git", "rev-parse", "--short", "HEAD")
@@ -42,8 +45,21 @@ android {
             timeZone = TimeZone.getTimeZone("GMT+8")
         }.format(Date())
 
+        // git describe 输出:
+        //   tag 正上方: v1.1.1
+        //   tag 之后:   v1.1.1-3-gabc1234
+        val resolvedVersionName = gitDescribe.removePrefix("v").let { desc ->
+            val dashIdx = desc.indexOf('-')
+            if (dashIdx > 0) {
+                val base = desc.substring(0, dashIdx)
+                val afterDash = desc.substring(dashIdx + 1)
+                val devCount = afterDash.substringBefore('-').toIntOrNull()
+                if (devCount != null) "$base.dev$devCount" else base
+            } else desc
+        }
+
         versionCode = commitCount
-        versionName = "1.1.$commitCount"
+        versionName = resolvedVersionName
 
         buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
         buildConfigField("Boolean", "GIT_DIRTY", "$isDirty")

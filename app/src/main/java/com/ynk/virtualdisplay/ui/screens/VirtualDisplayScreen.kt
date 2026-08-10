@@ -123,34 +123,7 @@ fun VirtualDisplayScreen(
                 )
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val isLocal = uiState.currentServerNode.host == "127.0.0.1" || uiState.currentServerNode.host == "localhost"
-                    val isLocalPrivileged = isLocal && uiState.privilegeMode != com.ynk.virtualdisplay.data.PrivilegeMode.NONE
-                    if (!isLocalPrivileged) {
-                        TextButton(
-                            onClick = { viewModel.handleIntent(MainIntent.BindService) },
-                            enabled = !uiState.isLoading,
-                            colors = ButtonDefaults.textButtonColors(
-                                contentColor = MaterialTheme.colorScheme.primary
-                            )
-                        ) {
-                            Text(
-                                text = "重连服务",
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                    IconButton(
-                        onClick = { viewModel.handleIntent(MainIntent.RefreshDisplays) },
-                        modifier = Modifier
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-                            .size(36.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "Refresh",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                    
                 }
             }
 

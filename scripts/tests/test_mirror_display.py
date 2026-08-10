@@ -56,12 +56,23 @@ def test_mirror_default_display(shared_client: ControlClient, daemon_config):
     port = daemon_config["port"]
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+    # 0. 获取主屏 (0) 的尺寸以匹配镜像
+    infos_resp = shared_client.get_active_display_infos()
+    assert infos_resp["type"] == TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS
+    main_info = next((d for d in infos_resp["displays"] if d["display_id"] == 0), None)
+    assert main_info is not None, "未找到主屏幕 (display_id=0)"
+
+    # 使用主屏的宽高和 DPI 创建镜像
+    width = main_info["width"]
+    height = main_info["height"]
+    dpi = main_info["dpi"]
+
     # 1. 创建镜像主屏 (0) 的虚拟显示器
     resp = shared_client.create_virtual_display(
         name="MirrorTest_Default",
-        width=1080,
-        height=1920,
-        dpi=320,
+        width=width,
+        height=height,
+        dpi=dpi,
         flags=8,  # 带有 OWN_CONTENT_ONLY，应被底层自动剥离
         display_id=0  # 镜像主屏
     )
@@ -73,9 +84,12 @@ def test_mirror_default_display(shared_client: ControlClient, daemon_config):
         # 等待创建生效
         time.sleep(1.0)
 
+        # 确保屏幕有变化：在主屏启动 Settings
+        shared_client.start_activity("com.android.settings", 0)
+        time.sleep(1.0)
+
         # 2. 验证 API 返回的 mirror_display_id 属性是否为 0
         infos_resp = shared_client.get_active_display_infos()
-        assert infos_resp["type"] == TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS
         matches = [d for d in infos_resp["displays"] if d["display_id"] == did]
         assert len(matches) == 1
         info = matches[0]
@@ -147,6 +161,10 @@ def test_no_mirror_display(shared_client: ControlClient, daemon_config):
 
     try:
         time.sleep(1.0)
+
+        # 启动一个 Activity 确保有画面输出，避免 len(data) == 0
+        shared_client.start_activity("com.android.settings", did)
+        time.sleep(1.5)
 
         # 2. 验证 API 返回的 mirror_display_id 属性是否为 -1
         infos_resp = shared_client.get_active_display_infos()

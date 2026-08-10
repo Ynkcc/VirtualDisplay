@@ -98,7 +98,8 @@ class DaemonTransport {
 
             val ctrl = Socket()
             ctrl.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-            ctrl.soTimeout = SOCKET_READ_TIMEOUT_MS
+            // Disable timeout for role sockets to prevent Controller thread from dying on idle
+            ctrl.soTimeout = 0
             controlSocket = ctrl
 
             val ctrlOut = ctrl.getOutputStream()
@@ -116,7 +117,7 @@ class DaemonTransport {
 
             val video = Socket()
             video.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-            video.soTimeout = SOCKET_READ_TIMEOUT_MS
+            video.soTimeout = 0
             videoSocket = video
 
             val videoOut = video.getOutputStream()
