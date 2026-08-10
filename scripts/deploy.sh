@@ -7,15 +7,17 @@
 #   scripts/deploy.sh --skip-restart   # build and push, but don't restart server
 #   scripts/deploy.sh --port 27183    # specify daemon port (default: 27183)
 #   scripts/deploy.sh --bind 127.0.0.1 # specify bind address (default: 127.0.0.1)
+#   scripts/deploy.sh --token mysecret # set daemon_secret_token (default: none)
 
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER_DIR="$PROJECT_ROOT/scrcpy/server"
-APK_PATH="$SERVER_DIR/build/outputs/apk/release/server-release-unsigned.apk"
+APK_PATH="$SERVER_DIR/build/outputs/apk/release/scrcpy-server-release-unsigned.apk"
 REMOTE_APK="/data/local/tmp/scrcpy-server.apk"
 PORT="27183"
 BIND_ADDRESS="127.0.0.1"
+SECRET_TOKEN=""
 SKIP_BUILD=false
 SKIP_RESTART=false
 
@@ -25,6 +27,7 @@ while [[ $# -gt 0 ]]; do
         --skip-restart) SKIP_RESTART=true; shift ;;
         --port) PORT="$2"; shift 2 ;;
         --bind) BIND_ADDRESS="$2"; shift 2 ;;
+        --token) SECRET_TOKEN="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -50,7 +53,11 @@ if [ "$SKIP_BUILD" = false ]; then
     fi
 
     cd "$PROJECT_ROOT"
-    ./gradlew -p "$SERVER_DIR" assembleRelease 2>&1 | tail -3
+    # scrcpy/server is included as a Gradle composite build via settings.gradle.kts,
+    # so the task must be invoked from the project root using the :scrcpy-server
+    # module path. Invoking via -p scrcpy/server would bypass the composite
+    # configuration and fail on newer Gradle versions.
+    ./gradlew :scrcpy-server:assembleRelease -x lintVitalAnalyzeRelease 2>&1 | tail -5
 fi
 
 if [ ! -f "$APK_PATH" ]; then
@@ -66,7 +73,12 @@ if [ "$SKIP_RESTART" = false ]; then
     echo "[3/3] Pushing and starting server..."
     adb push "$APK_PATH" "$REMOTE_APK" 2>&1 | tail -1
 
-    adb shell "su -c 'export CLASSPATH=$REMOTE_APK; nohup app_process / com.genymobile.scrcpy.Server 4.1 tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false daemon=true daemon_port=$PORT daemon_bind_address=$BIND_ADDRESS >/data/local/tmp/scrcpy-server.log 2>&1 &'" 2>&1
+    TOKEN_ARG=""
+    if [[ -n "$SECRET_TOKEN" ]]; then
+        TOKEN_ARG="daemon_secret_token=$SECRET_TOKEN "
+        echo "       Auth enabled with daemon_secret_token"
+    fi
+    adb shell "su -c 'export CLASSPATH=$REMOTE_APK; nohup app_process / com.genymobile.scrcpy.Server 4.1 tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false send_stream_meta=false send_frame_meta=true cleanup=false daemon=true daemon_port=$PORT daemon_bind_address=$BIND_ADDRESS ${TOKEN_ARG}>/data/local/tmp/scrcpy-server.log 2>&1 &'" 2>&1
 
     sleep 2
     adb forward "tcp:$PORT" "tcp:$PORT" 2>/dev/null || true

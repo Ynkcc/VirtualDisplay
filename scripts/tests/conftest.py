@@ -27,6 +27,11 @@ def pytest_addoption(parser):
     parser.addoption(
         "--skip-build", action="store_true", default=False, help="跳过 gradle 编译服务端的步骤"
     )
+    parser.addoption(
+        "--token", action="store", default=None,
+        help="daemon 认证令牌 (daemon_secret_token)；设置后会同时作为服务端启动参数"
+             "与客户端认证凭据。留空则不启用认证。"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -36,6 +41,7 @@ def daemon_config(request):
         "port": int(request.config.getoption("--port")),
         "bind": request.config.getoption("--bind"),
         "skip_build": request.config.getoption("--skip-build"),
+        "token": request.config.getoption("--token"),
     }
 
 
@@ -52,6 +58,7 @@ def device_env(daemon_config):
     port = daemon_config["port"]
     bind_address = daemon_config["bind"]
     skip_build = daemon_config["skip_build"]
+    secret_token = daemon_config["token"]
 
     # 1. 确认 adb 环境
     res = subprocess.run(["adb", "get-state"], capture_output=True, text=True)
@@ -60,7 +67,7 @@ def device_env(daemon_config):
 
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     server_dir = os.path.join(project_root, "scrcpy", "server")
-    apk_path = os.path.join(server_dir, "build", "outputs", "apk", "release", "server-release-unsigned.apk")
+    apk_path = os.path.join(server_dir, "build", "outputs", "apk", "release", "scrcpy-server-release-unsigned.apk")
     remote_apk = "/data/local/tmp/scrcpy-server.apk"
 
     # 2. 编译 APK
@@ -75,8 +82,11 @@ def device_env(daemon_config):
         
         # 显式使用项目根目录下的 gradlew
         gradlew = os.path.join(project_root, "gradlew")
+        # scrcpy/server 通过 settings.gradle.kts 的 includeBuild 作为复合构建引入，
+        # 必须从项目根目录以 :scrcpy-server 模块路径调用，否则 Gradle 9.5 会报
+        # configuration cache serialization 错误或找不到依赖。
         res_build = subprocess.run(
-            [gradlew, "-p", server_dir, "assembleRelease"],
+            [gradlew, ":scrcpy-server:assembleRelease", "-x", "lintVitalAnalyzeRelease"],
             cwd=project_root,
             env=env,
             capture_output=True,
@@ -104,12 +114,14 @@ def device_env(daemon_config):
 
     print(f"[conftest] 正在启动 scrcpy server 守护进程 (端口: {port})...")
     # nohup 启动
+    token_arg = f"daemon_secret_token={secret_token} " if secret_token else ""
     cmd = (
         f"su -c 'export CLASSPATH={remote_apk}; "
         f"nohup app_process / com.genymobile.scrcpy.Server 4.1 "
         f"tunnel_forward=true audio=false send_device_meta=false send_dummy_byte=false "
         f"send_stream_meta=false send_frame_meta=true cleanup=false "
         f"daemon=true daemon_port={port} daemon_bind_address={bind_address} "
+        f"{token_arg}"
         f">/data/local/tmp/scrcpy-server.log 2>&1 &'"
     )
     subprocess.run(["adb", "shell", cmd], capture_output=True)
@@ -139,7 +151,10 @@ def shared_client(device_env, daemon_config):
     提供全局共享的 ControlClient 实例。
     用于顺序 API 校验，在一个 TCP 连接生命周期内执行所有操作，避免 Looper 重启失败。
     """
-    client = ControlClient(host=daemon_config["bind"], port=daemon_config["port"])
+    client = ControlClient(
+        host=daemon_config["bind"], port=daemon_config["port"],
+        secret_token=daemon_config["token"],
+    )
     client.connect()
     yield client
     client.close()
@@ -154,7 +169,10 @@ def new_client_factory(device_env, daemon_config):
     clients = []
 
     def _create() -> ControlClient:
-        client = ControlClient(host=daemon_config["bind"], port=daemon_config["port"])
+        client = ControlClient(
+            host=daemon_config["bind"], port=daemon_config["port"],
+            secret_token=daemon_config["token"],
+        )
         client.connect()
         clients.append(client)
         return client

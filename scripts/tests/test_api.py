@@ -3,7 +3,9 @@
 """
 Daemon 基础控制 API 的测试用例集。
 
-顺序验证创建、查询、调整大小、启动 Activity、切换显示器、事件注入、释放以及退出 Daemon。
+顺序验证创建、查询、调整大小、启动 Activity、释放以及退出 Daemon。
+注：switch_display(207) / inject_input_event_with_display_id(206) 已在
+b7aef962 中从服务端移除（多显示器架构下冗余），故不再覆盖。
 """
 
 import time
@@ -16,16 +18,6 @@ class TestDaemonApi:
     initial_count = 0
     did_1 = None
     did_2 = None
-
-    # MotionEvent 的 Parcel 字节流 (在 Android 16 API 36 上生成的样本)
-    motion_event_parcel = bytes.fromhex(
-        "01000000010000000100000051e71dce0000000002100000000000002000000000000000000000000"
-        "000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-        "00000000000000000000000000000000000000000000000000000000000000000000000000803f"
-        "00000000000000000000000000000000803f000000000000803f0000803f0000c07f0000c07f0000"
-        "803f0000000000000000000000000000803f0000000000bab63306a50000000000000100000000bab6"
-        "3306a5000000000000000000f00000c842000048430000803f0000803f00000000"
-    )
 
     def test_01_get_active_display_ids_initial(self, shared_client: ControlClient):
         """测试 1: 获取初始活跃显示器列表。"""
@@ -109,50 +101,41 @@ class TestDaemonApi:
         # 稍等片刻让 Activity 页面初始化
         time.sleep(0.5)
 
-    def test_06_switch_display(self, shared_client: ControlClient):
-        """测试 6: 切换显示器。"""
-        assert TestDaemonApi.did_1 is not None
+    def test_06_release_virtual_display(self, shared_client: ControlClient):
+        """测试 6: 释放虚拟显示器。
 
-        # 切换到虚拟显示器 did_1
-        resp_switch_vd = shared_client.switch_display(TestDaemonApi.did_1)
-        assert resp_switch_vd["status_code"] == 0, f"切换至 did_1 失败: {resp_switch_vd.get('msg')}"
-
-        # 切换回主显示器 0
-        resp_switch_main = shared_client.switch_display(0)
-        assert resp_switch_main["status_code"] == 0, f"切换回主显示器 0 失败: {resp_switch_main.get('msg')}"
-
-    def test_07_inject_input_event(self, shared_client: ControlClient):
-        """测试 7: 向指定显示器注入 Input 事件。"""
-        assert TestDaemonApi.did_1 is not None
-
-        # 1. 向虚拟显示器 did_1 注入 MotionEvent
-        resp_vd = shared_client.inject_input_event_with_display_id(
-            display_id=TestDaemonApi.did_1, is_key_event=False, parcel_bytes=self.motion_event_parcel
-        )
-        assert resp_vd["status_code"] == 0, f"向 did_1 注入事件失败: {resp_vd.get('msg')}"
-
-        # 2. 向主显示器 0 注入 MotionEvent
-        resp_main = shared_client.inject_input_event_with_display_id(
-            display_id=0, is_key_event=False, parcel_bytes=self.motion_event_parcel
-        )
-        assert resp_main["status_code"] == 0, f"向主显示器 0 注入事件失败: {resp_main.get('msg')}"
-
-    def test_08_release_virtual_display(self, shared_client: ControlClient):
-        """测试 8: 释放虚拟显示器。"""
+        服务端 release 是引用计数 + 幂等设计：
+          - 最后一个 user 释放 → 真正销毁，msg="DESTROYED"
+          - 仍有其他 user 引用 → 仅减少引用，msg="RELEASED"
+          - 不存在的 displayId → best-effort orphan release，仍返回 status_code=0
+            （幂等语义，与 HTTP DELETE 的 204 类似，避免客户端重试造成歧义）
+        """
         assert TestDaemonApi.did_1 is not None
         assert TestDaemonApi.did_2 is not None
 
-        # 释放 did_1 和 did_2
+        # 释放 did_1 和 did_2 —— 本会话是唯一 user，应真正销毁
         for did in [TestDaemonApi.did_1, TestDaemonApi.did_2]:
             resp = shared_client.release_virtual_display(did)
             assert resp["status_code"] == 0, f"释放 display_id={did} 失败: {resp.get('msg')}"
+            assert resp["msg"] == "DESTROYED", (
+                f"唯一 user 释放后应返回 DESTROYED，实际: {resp.get('msg')}"
+            )
 
         # 校验活跃显示器列表是否恢复
         resp_list = shared_client.get_active_display_ids()
         assert resp_list["count"] == TestDaemonApi.initial_count, "释放后显示器数量应该恢复到初始值"
 
-        # 异常测试：释放不存在的显示器 9999
-        resp_fail = shared_client.release_virtual_display(9999)
-        assert resp_fail["status_code"] != 0, "释放不存在的显示器应该报错"
+        # 幂等性测试：释放已销毁 / 不存在的 displayId 应返回成功（best-effort orphan release）
+        resp_idem = shared_client.release_virtual_display(TestDaemonApi.did_1)
+        assert resp_idem["status_code"] == 0, (
+            f"重复释放已销毁的 displayId 应幂等返回成功，实际: {resp_idem}"
+        )
+        resp_orphan = shared_client.release_virtual_display(9999)
+        assert resp_orphan["status_code"] == 0, (
+            f"释放不存在的 displayId 应幂等返回成功 (best-effort orphan release)，实际: {resp_orphan}"
+        )
+        assert resp_orphan["msg"] == "RELEASED", (
+            f"orphan release 的 msg 应为 RELEASED，实际: {resp_orphan.get('msg')}"
+        )
 
 

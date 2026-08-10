@@ -20,9 +20,10 @@ def main():
     parser = argparse.ArgumentParser(description="scrcpy Daemon 统一自动化测试启动器")
     parser.add_argument("--port", default="27183", help="daemon 监听的 TCP 端口 (默认: 27183)")
     parser.add_argument("--bind", default="127.0.0.1", help="daemon 绑定的 IP 地址 (默认: 127.0.0.1)")
+    parser.add_argument("--token", default=None, help="daemon 认证令牌 (daemon_secret_token)，留空则不启用认证")
     parser.add_argument("--skip-build", action="store_true", help="跳过 gradle 编译服务端的步骤")
     parser.add_argument("--html-report", action="store_true", help="生成 HTML 格式测试报告 (需要 pytest-html 插件)")
-    
+
     args, unknown = parser.parse_known_args()
 
     # 切换至 scripts 目录下，保证测试用例内部寻址一致
@@ -37,7 +38,10 @@ def main():
         "--port", args.port,
         "--bind", args.bind
     ]
-    
+
+    if args.token:
+        pytest_args.extend(["--token", args.token])
+
     if args.skip_build:
         pytest_args.append("--skip-build")
 

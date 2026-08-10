@@ -15,6 +15,7 @@ from typing import Optional, List, Dict, Any
 ROLE_VIDEO = 0
 ROLE_AUDIO = 1
 ROLE_CONTROL = 2
+ROLE_NEGOTIATION = 3
 
 DEVICE_NAME_FIELD_LENGTH = 64
 
@@ -24,16 +25,25 @@ TYPE_RELEASE_VIRTUAL_DISPLAY = 202
 TYPE_RESIZE_VIRTUAL_DISPLAY = 203
 TYPE_START_ACTIVITY = 204
 TYPE_GET_ACTIVE_DISPLAY_IDS = 205
-TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID = 206
-TYPE_SWITCH_DISPLAY = 207
+# 注意：TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID(206) 与 TYPE_SWITCH_DISPLAY(207)
+# 已从服务端移除 (commit b7aef962)。注入改走 ROLE_CONTROL socket 上的 scrcpy 原生
+# ControlMessage 协议；多显示器架构下不再需要「切换显示器」——直接为目标 displayId
+# 打开 ROLE_VIDEO socket 即可。
 TYPE_EXIT_DAEMON = 208
-TYPE_START_VIDEO_STREAM = 209
-TYPE_STOP_VIDEO_STREAM = 210
+# 注意：TYPE_START_VIDEO_STREAM(209) / TYPE_STOP_VIDEO_STREAM(210) 已从服务端移除
+# (commit b7aef962)。视频流生命周期现与 (ROLE_VIDEO, displayId) socket 绑定：
+# VideoClient.connect() 绑定 socket 时服务端自动启动编码器并开始推流，
+# socket 关闭/会话清理时自动停止。客户端不再需要显式 start/stop 命令。
 TYPE_GET_ROTATION = 211
 TYPE_FREEZE_ROTATION = 212
 TYPE_THAW_ROTATION = 213
 TYPE_IS_ROTATION_FROZEN = 214
 TYPE_GET_ACTIVE_DISPLAY_INFOS = 215
+# 协商阶段会话配置：客户端在收到 sessionId + deviceMeta 之后、打开任何
+# ROLE_VIDEO / ROLE_CONTROL socket 之前必须先发送此消息。服务端据此进入
+# CONFIGURED 阶段，否则会拒绝 (等待 2s 后) 所有 role socket。携带按行分隔的
+# scrcpy 选项覆写与 role 声明 (rolesMask=0 + 空 entries 表示允许任意 role/displayId)。
+TYPE_CONFIGURE_SESSION = 216
 
 # 设备响应类型 (服务端 -> 客户端)
 TYPE_RESPONSE_GENERIC = 100
@@ -44,7 +54,8 @@ TYPE_RESPONSE_ACTIVE_DISPLAY_INFOS = 102
 class ControlClient:
     """用于 scrcpy daemon 控制协议的客户端。"""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 27183):
+    def __init__(self, host: str = "127.0.0.1", port: int = 27183,
+                 secret_token: Optional[str] = None):
         self.host = host
         self.port = port
         self.sock: Optional[socket.socket] = None
@@ -52,26 +63,53 @@ class ControlClient:
         self._sequence = 0
         self.session_id = -1
         self.device_name = ""
+        # 与服务端 daemon_secret_token 对应；为 None 时不发送认证。
+        self.secret_token = secret_token
+        # CONFIGURE_SESSION 是否已发送成功（避免重复配置）。
+        self._configured = False
 
     def connect(self, timeout: float = 10.0):
-        """连接到 daemon 服务端并进行 TCP 握手。"""
+        """连接到 daemon 服务端并进行两阶段 TCP 握手（ROLE_NEGOTIATION）。
+
+        当前 daemon 二进制协议握手流程：
+          1. 客户端发送 1 字节 ROLE_NEGOTIATION=3
+          2. 服务端分配 sessionId 并回写 4 字节 Big-Endian sessionId
+          3. (可选) 若设置了 secret_token，客户端发送 4 字节长度 + UTF-8 token
+             字节用于认证；认证失败则服务端关闭连接并拉黑 IP
+          4. 服务端在 session 线程中回写 64 字节 device name
+          5. 客户端发送 CONFIGURE_SESSION(216)，服务端进入 CONFIGURED 阶段并
+             回复 generic 响应；此后才允许打开 ROLE_VIDEO / ROLE_CONTROL socket
+        这个同一个 negotiation socket 直接成为后续的控制通道。
+        视频/音频等附加 socket 连接则发送对应 ROLE_* + 4 字节 sessionId +
+        4 字节 displayId（由 sessionId 绑定到同一个 ClientSession）。
+        """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(timeout)
         self.sock.connect((self.host, self.port))
 
-        # 1. 发送 Socket 角色为 ROLE_CONTROL
-        self.sock.sendall(bytes([ROLE_CONTROL]))
+        # 1. 发送 Socket 角色为 ROLE_NEGOTIATION
+        self.sock.sendall(bytes([ROLE_NEGOTIATION]))
 
         # 2. 接收服务端分配的唯一 4 字节 sessionId (Big-Endian)
         session_data = self._recv_exact(4)
         self.session_id = struct.unpack(">i", session_data)[0]
 
-        # 3. 接收 64 字节的设备名称
+        # 3. (可选) 发送认证 token：4 字节 Big-Endian 长度 + UTF-8 token
+        if self.secret_token is not None:
+            token_bytes = self.secret_token.encode("utf-8")
+            self.sock.sendall(struct.pack(">i", len(token_bytes)) + token_bytes)
+
+        # 4. 接收 64 字节的设备名称
         meta_data = self._recv_exact(DEVICE_NAME_FIELD_LENGTH)
         self.device_name = meta_data.rstrip(b'\x00').decode('utf-8', errors='replace')
 
         # 握手完毕后，将 socket 改为阻塞模式或保持带超时的状态（推荐不设置永久阻塞，以免测试 hang 住）
         self.sock.settimeout(timeout)
+
+        # 5. 发送 CONFIGURE_SESSION，使服务端进入 CONFIGURED 阶段。
+        #    默认空 options + rolesMask=0 + 空 entries → 允许任意 role/displayId。
+        if not self._configured:
+            self.configure_session()
 
     def close(self):
         """关闭连接。"""
@@ -172,6 +210,46 @@ class ControlClient:
             )
         return resp
 
+    def configure_session(
+        self,
+        options_kv: str = "",
+        roles_mask: int = 0,
+        roles_entries: Optional[List[Dict[str, int]]] = None,
+    ) -> Dict[str, Any]:
+        """TYPE 216: 会话配置。
+
+        必须在协商握手之后、打开任何 role socket 之前发送。服务端据此把会话
+        从 INIT 推进到 CONFIGURED 阶段，否则 ROLE_VIDEO / ROLE_CONTROL socket
+        会被拒绝 (等待 2s 后关闭)。
+
+        参数:
+          options_kv: 按行分隔的 scrcpy key=value 选项覆写 (默认空串 = 沿用
+            服务端启动参数)。
+          roles_mask: 旧版 3-bit role 类型掩码 (0 = 允许任意 role 类型)。
+          roles_entries: 显式 (role, displayId) 声明列表，非空时优先于
+            roles_mask；为空 (默认) 则服务端回退到 mask 判定。脚本侧动态创建
+            显示器的场景应保持默认 (空 entries + mask=0)，从而允许后续为任意
+            displayId 打开 role socket。
+
+        线格式 (紧跟 1 字节 type + 8 字节 sequence 之后):
+          int32 optionsKv_len + optionsKv_bytes
+          int32 rolesMask
+          int32 entriesCount + entriesCount × (uint8 role + int32 displayId)
+        """
+        options_bytes = options_kv.encode("utf-8")
+        payload = struct.pack(">i", len(options_bytes)) + options_bytes
+        payload += struct.pack(">i", roles_mask)
+
+        entries = roles_entries or []
+        payload += struct.pack(">i", len(entries))
+        for entry in entries:
+            payload += struct.pack(">Bi", entry["role"], entry["display_id"])
+
+        resp = self.request(TYPE_CONFIGURE_SESSION, payload)
+        if resp.get("status_code") == 0:
+            self._configured = True
+        return resp
+
     # === Daemon 控制命令接口 ===
 
     def create_virtual_display(
@@ -206,33 +284,13 @@ class ControlClient:
         """TYPE 205: 获取当前活跃的显示器 ID 列表。"""
         return self.request(TYPE_GET_ACTIVE_DISPLAY_IDS, b"")
 
-    def inject_input_event_with_display_id(
-        self, display_id: int, is_key_event: bool, parcel_bytes: bytes
-    ) -> Dict[str, Any]:
-        """TYPE 206: 向指定显示器注入按键/触摸等 Input Event。"""
-        payload = struct.pack(">i", display_id)
-        payload += struct.pack(">B", 1 if is_key_event else 0)
-        payload += struct.pack(">i", len(parcel_bytes))
-        payload += parcel_bytes
-        return self.request(TYPE_INJECT_INPUT_EVENT_WITH_DISPLAY_ID, payload)
-
-    def switch_display(self, display_id: int) -> Dict[str, Any]:
-        """TYPE 207: 切换显示器。"""
-        payload = struct.pack(">i", display_id)
-        return self.request(TYPE_SWITCH_DISPLAY, payload)
-
     def exit_daemon(self) -> Dict[str, Any]:
         """TYPE 208: 退出 Daemon 进程。"""
         return self.request(TYPE_EXIT_DAEMON, b"")
 
-    def start_video_stream(self, display_id: int) -> Dict[str, Any]:
-        """TYPE 209: 启动指定显示器的视频流。"""
-        payload = struct.pack(">i", display_id)
-        return self.request(TYPE_START_VIDEO_STREAM, payload)
-
-    def stop_video_stream(self) -> Dict[str, Any]:
-        """TYPE 210: 停止当前连接的视频流。"""
-        return self.request(TYPE_STOP_VIDEO_STREAM, b"")
+    # 视频流启停不再有显式命令 (TYPE 209/210 已移除)。
+    # 启动：VideoClient.connect() 绑定 ROLE_VIDEO socket 时服务端自动启动推流。
+    # 停止：VideoClient.close() 关闭 socket 时服务端自动停止。
 
     def get_rotation(self, display_id: int) -> Dict[str, Any]:
         """TYPE 211: 查询指定显示器的当前旋转角度 (0-3)。响应 msg 为旋转值字符串。"""

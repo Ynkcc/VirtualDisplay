@@ -37,19 +37,53 @@ class VideoClient:
         self._thread: Optional[threading.Thread] = None
 
     def connect(self, timeout: float = 10.0):
-        """建立视频流 socket 握手。"""
+        """建立视频流 socket 握手。
+
+        多显示器 role socket 协议 (ClientSession b7aef962 之后)：
+          1. 发送 1 字节 ROLE_VIDEO
+          2. 发送 4 字节 Big-Endian sessionId (协商阶段获得)
+          3. 发送 4 字节 Big-Endian displayId (本视频流绑定的显示器)
+          4. 读取服务端回写的 4 字节 displayId 确认 (路由成功的 ack)
+
+        前置条件：对应的 ControlClient 必须已完成 CONFIGURE_SESSION，
+        否则服务端会因会话仍处于 INIT 阶段而拒绝本 role socket。
+        """
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(timeout)
         self.sock.connect((self.host, self.port))
 
         # 1. 发送 Socket 角色为 ROLE_VIDEO
         self.sock.sendall(struct.pack('B', ROLE_VIDEO))
-        
+
         # 2. 发送对应的 Control 握手得到的 sessionId (4字节 Big-Endian)
         self.sock.sendall(struct.pack('>i', self.session_id))
-        
+
+        # 3. 发送 displayId (4字节 Big-Endian) —— 多显示器 role socket 协议
+        self.sock.sendall(struct.pack('>i', self.display_id))
+
+        # 4. 读取服务端回写的 displayId 确认 (4字节 Big-Endian)
+        ack = self._recv_exact(4)
+        ack_display_id = struct.unpack('>i', ack)[0]
+        if ack_display_id != self.display_id:
+            raise ConnectionError(
+                f"视频 socket displayId 路由不匹配: 期望 {self.display_id}, "
+                f"服务端 ack={ack_display_id}"
+            )
+
         # 将 socket 恢复或设定超时
         self.sock.settimeout(1.0)
+
+    def _recv_exact(self, n: int) -> bytes:
+        """从 socket 精确读取 n 字节。"""
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = self.sock.recv(n - len(buf))
+            if not chunk:
+                raise ConnectionError(
+                    f"连接已关闭，期望读取 {n} 字节，实际只读取了 {len(buf)} 字节"
+                )
+            buf.extend(chunk)
+        return bytes(buf)
 
     def start_capture(self, duration_seconds: float = 10.0):
         """启动后台线程接收并累积视频帧数据。"""
@@ -270,12 +304,17 @@ class VideoClient:
             self.sock = None
 
     @staticmethod
-    def images_differ(path_a: str, path_b: str, threshold: float = 12.0) -> bool:
+    def images_differ(path_a: str, path_b: str, threshold: float = 6.0) -> bool:
         """
-        将两张 PNG 缩放到 32x32 后比较平均绝对像素差，超过 threshold 视为内容不同。
+        将两张 PNG 缩放到 64x64 后比较平均绝对像素差，超过 threshold 视为内容不同。
 
         用于校验两个屏幕的视频流确实捕获了不同内容（防止错误地捕获到同一屏幕）。
         跨分辨率安全：缩放到统一尺寸后再比较。
+
+        使用 64x64 (而非 32x32) 保留更多内容细节 —— 两个显示浅色背景的 App
+        (如 Settings 与 Calculator) 在 32x32 下差异被均值抹平，导致误判为相同。
+        threshold 默认 6.0：同一显示器的两帧差异通常 < 2，不同显示器即便都是
+        浅色背景，因布局/文字/图标位置不同，64x64 下的差异通常 > 6。
         """
         try:
             import numpy as np
@@ -287,8 +326,8 @@ class VideoClient:
             hb = hashlib.md5(open(path_b, 'rb').read()).hexdigest()
             return ha != hb
 
-        a = np.asarray(Image.open(path_a).convert('RGB').resize((32, 32)), dtype=np.float32)
-        b = np.asarray(Image.open(path_b).convert('RGB').resize((32, 32)), dtype=np.float32)
+        a = np.asarray(Image.open(path_a).convert('RGB').resize((64, 64)), dtype=np.float32)
+        b = np.asarray(Image.open(path_b).convert('RGB').resize((64, 64)), dtype=np.float32)
         return float(np.abs(a - b).mean()) > threshold
 
     @staticmethod

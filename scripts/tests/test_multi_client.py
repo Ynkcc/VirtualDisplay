@@ -58,33 +58,24 @@ def test_multi_client_video_stream(new_client_factory, daemon_config):
 
         video_client_main.connect()
         video_client_vd.connect()
-
-        # 稍微等待 0.5 秒，以确保服务端线程完成 Video FD 的绑定和反射，避免 race condition
+        # ROLE_VIDEO socket 绑定即自动启动推流 (TYPE 209/210 已从服务端移除)。
+        # 稍等让编码器产出首帧，避免 capture 启动时缓冲区尚未填充。
         time.sleep(0.5)
 
-        # 5. 向服务端发起启动视频流请求
-        resp_stream_main = client0.start_video_stream(0)
-        assert resp_stream_main["status_code"] == 0, f"主显示器启动视频流请求失败: {resp_stream_main.get('msg')}"
-
-        resp_stream_vd = client1.start_video_stream(vd_id)
-        assert resp_stream_vd["status_code"] == 0, f"虚拟显示器启动视频流请求失败: {resp_stream_vd.get('msg')}"
-
-        # 6. 后台并发录制视频流数据 (持续 6 秒)
+        # 5. 后台并发录制视频流数据 (持续 6 秒)
         capture_duration = 6.0
         video_client_main.start_capture(capture_duration)
         video_client_vd.start_capture(capture_duration)
-        
+
         print(f"\n[多客户端测试] 正在并发捕获主显示器和虚拟显示器 {vd_id} 的视频流 ({capture_duration}s)...")
         time.sleep(capture_duration + 1)
 
         video_client_main.stop_capture()
         video_client_vd.stop_capture()
 
-        # 7. 向服务端发送停止视频流请求
-        client0.stop_video_stream()
-        client1.stop_video_stream()
+        # 6. 关闭 video socket 即自动停止推流（在 finally 中 video_client.close() 完成）
 
-        # 8. 提取原始 NAL 字节并保存到 H.264
+        # 7. 提取原始 NAL 字节并保存到 H.264
         h264_main = os.path.join(output_dir, "session_main.h264")
         h264_vd = os.path.join(output_dir, f"session_vd_{vd_id}.h264")
 
