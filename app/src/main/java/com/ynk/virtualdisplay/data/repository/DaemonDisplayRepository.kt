@@ -481,6 +481,19 @@ class DaemonDisplayRepository(
         return startResult
     }
 
+    override suspend fun stopStreaming() {
+        Log.i(TAG, "stopStreaming: stopping current stream (display=$currentStreamingDisplayId)")
+        if (currentStreamingDisplayId == -1) return
+        // 先断开 Scrcpy 子通道（video+control）并停止解码器，再重置流标识。
+        // 保留 negotiation 连接与显示器本身，供下次进入重建全新通道。
+        runCatching { videoController.stop() }.onFailure {
+            Log.w(TAG, "stopStreaming: videoController.stop failed", it)
+        }
+        currentStreamingDisplayId = -1
+        currentVideoWidth = DEFAULT_WIDTH
+        currentVideoHeight = DEFAULT_HEIGHT
+    }
+
     override suspend fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Result<Unit> {
         // 调整尺寸 → Remote DataSource
         val result = remoteDataSource.resizeDisplay(displayId, width, height, dpi)

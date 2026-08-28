@@ -64,6 +64,15 @@ interface IDisplayRepository {
     /** 设置显示器 Surface — 驱动客户端 H264 解码器 */
     suspend fun setDisplaySurface(displayId: Int, surface: Surface?): Result<Unit>
 
+    /**
+     * 停止当前正在进行的视频/控制流（ROLE_VIDEO + ROLE_CONTROL 通道）。
+     *
+     * 仅销毁流通道，保留 negotiation 连接与显示器本身，因此下次
+     * [setDisplaySurface] 会重建一套全新的通道。操控页面退出时调用，
+     * 避免复用已失效（被服务端关闭）的 control socket。
+     */
+    suspend fun stopStreaming()
+
     /** 重新调整指定虚拟显示器的物理尺寸和 DPI */
     suspend fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Result<Unit>
 

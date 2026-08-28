@@ -91,8 +91,11 @@ class DaemonTransport {
 
             val ctrl = Socket()
             ctrl.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-            // Disable timeout for role sockets to prevent Controller thread from dying on idle
-            ctrl.soTimeout = 0
+            // NOTE: do NOT touch ctrl.soTimeout here. This client-side setting
+            // only affects reads on this local socket and has no effect on the
+            // server's Controller thread. The server already keeps its control
+            // loop alive across idle timeouts (ControlChannel#recvKeepingAlive),
+            // so the socket keeps the default 0 (no timeout) on the client.
             controlSocket = ctrl
 
             val ctrlOut = ctrl.getOutputStream()

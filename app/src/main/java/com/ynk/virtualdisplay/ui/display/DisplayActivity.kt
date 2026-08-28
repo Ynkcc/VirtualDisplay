@@ -35,6 +35,7 @@ import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import com.ynk.virtualdisplay.ui.components.AppSelectionDialog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
@@ -187,6 +188,16 @@ class DisplayActivity : ComponentActivity() {
         if (isLocalNode) {
             val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
             dm.unregisterDisplayListener(displayListener)
+        }
+        // 退出操控页：销毁 ROLE_VIDEO + ROLE_CONTROL 流通道（保留 negotiation 与显示器）。
+        // 不依赖 lifecycleScope（onDestroy 时已取消），用独立 GlobalScope 触发，确保下次
+        // 进入重建全新通道，避免复用被服务端关闭的 control socket。
+        if (remoteDisplayId != null) {
+            GlobalScope.launch(Dispatchers.IO) {
+                runCatching { repository.stopStreaming() }.onFailure {
+                    Log.w(TAG, "stopStreaming on destroy failed", it)
+                }
+            }
         }
     }
 

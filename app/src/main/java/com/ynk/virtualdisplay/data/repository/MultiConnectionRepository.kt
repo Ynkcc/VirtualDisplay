@@ -117,6 +117,10 @@ class MultiConnectionRepository(
     override suspend fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Result<Unit> =
         activeSlot?.resizeDisplay(displayId, width, height, dpi) ?: Result.failure(noActiveSlotError())
 
+    override suspend fun stopStreaming() {
+        activeSlot?.stopStreaming()
+    }
+
     override suspend fun launchApp(packageName: String, displayId: Int): Result<Int> =
         activeSlot?.launchApp(packageName, displayId) ?: Result.failure(noActiveSlotError())
 

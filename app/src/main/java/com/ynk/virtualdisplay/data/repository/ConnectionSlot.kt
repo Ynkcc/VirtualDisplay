@@ -390,6 +390,17 @@ class ConnectionSlot(
         return result
     }
 
+    override suspend fun stopStreaming() {
+        Log.i(TAG, "[${node.uniqueKey()}] stopStreaming: stopping current stream (display=$currentStreamingDisplayId)")
+        if (currentStreamingDisplayId == -1) return
+        runCatching { videoController.stop() }.onFailure {
+            Log.w(TAG, "[${node.uniqueKey()}] stopStreaming: videoController.stop failed", it)
+        }
+        currentStreamingDisplayId = -1
+        currentVideoWidth = DEFAULT_WIDTH
+        currentVideoHeight = DEFAULT_HEIGHT
+    }
+
     override suspend fun resizeDisplay(displayId: Int, width: Int, height: Int, dpi: Int): Result<Unit> {
         val result = remoteDataSource.resizeDisplay(displayId, width, height, dpi)
         result.onSuccess {
