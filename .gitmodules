@@ -1,4 +1,3 @@
-[submodule "scrcpy"]
-	path = scrcpy
-	url = https://github.com/ynkcc/scrcpy.git
-	branch = daemon-mode
+[submodule "VirtualDisplayDaemon"]
+	path = daemon
+	url = https://github.com/Ynkcc/VirtualDisplayDaemon

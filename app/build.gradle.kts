@@ -127,9 +127,11 @@ android {
     sourceSets {
         getByName("main") {
             java.directories.add("src/main/java")
-            java.directories.add("../scrcpy/server/src/main/java")
+            // Paths here are resolved relative to the app/ module dir, so the
+            // scrcpy server sources live one level up under the repo root.
+            java.directories.add("../daemon/scrcpy/server/src/main/java")
             aidl.directories.add("src/main/aidl")
-            aidl.directories.add("../scrcpy/server/src/main/aidl")
+            aidl.directories.add("../daemon/scrcpy/server/src/main/aidl")
         }
     }
 }
@@ -137,6 +139,30 @@ android {
 // Set toolchain for Kotlin tasks as well
 kotlin {
     jvmToolchain(21)
+}
+
+// ---------------------------------------------------------------------------
+// Auto-apply daemon patches before every build.
+//
+// The scrcpy submodule stays on clean 'master'; the daemon sources only exist
+// as patches in daemon/patches_queue. This task re-applies them
+// (--force) so a plain `./gradlew :app:installDebug` always builds the latest
+// daemon sources without a manual tools/apply_patches.sh run.
+// ---------------------------------------------------------------------------
+val applyDaemonPatches = tasks.register<Exec>("applyDaemonPatches") {
+    group = "virtualdisplay"
+    description = "Re-apply daemon patches onto the scrcpy submodule (--force)."
+    workingDir = rootProject.projectDir
+    val script = rootProject.file("daemon/tools/apply_patches.sh")
+    commandLine(script.absolutePath, "--force")
+    // Always re-apply so the latest patches are guaranteed; the daemon Java
+    // sources are regenerated every build (an incremental recompile, not a
+    // full cache wipe).
+    outputs.upToDateWhen { false }
+}
+
+tasks.named("preBuild") {
+    dependsOn(applyDaemonPatches)
 }
 
 dependencies {
