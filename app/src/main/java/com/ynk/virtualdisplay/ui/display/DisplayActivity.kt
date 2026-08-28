@@ -24,16 +24,16 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.compose.ui.platform.ComposeView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.ynk.virtualdisplay.R
 import com.ynk.virtualdisplay.data.AppSettings
-import com.ynk.virtualdisplay.data.model.AppInfo
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
-import com.ynk.virtualdisplay.data.repository.RecentAppHelper
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
+import com.ynk.virtualdisplay.ui.components.AppSelectionDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -569,53 +569,25 @@ class DisplayActivity : ComponentActivity() {
     }
 
     private fun showAppSelectionDialog() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            val recentPkgs = RecentAppHelper.getRecentApps(this@DisplayActivity)
-            val appsResult = repository.listApps()
-            appsResult.onSuccess { apps ->
-                val allApps = apps.map { AppInfo(it.name, it.packageName) }
-
-                val recentList = mutableListOf<AppInfo>()
-                recentPkgs.forEach { pkg ->
-                    val app = allApps.find { it.packageName == pkg }
-                    if (app != null) recentList.add(app)
-                }
-                val otherList = allApps.filter { it.packageName !in recentPkgs }.sortedBy { it.name }
-                val sortedAppList = recentList + otherList
-
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                    if (sortedAppList.isEmpty()) {
-                        android.app.AlertDialog.Builder(this@DisplayActivity)
-                            .setTitle("选择应用")
-                            .setMessage("无法从服务端获取应用列表")
-                            .setNegativeButton("取消", null)
-                            .show()
-                        return@withContext
+        val displayId = remoteDisplayId ?: return
+        val composeView = ComposeView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+        rootLayout.addView(composeView)
+        composeView.setContent {
+            AppSelectionDialog(
+                loadApps = { repository.listApps() },
+                onDismiss = { rootLayout.removeView(composeView) },
+                onAppSelected = { appInfo ->
+                    rootLayout.removeView(composeView)
+                    lifecycleScope.launch {
+                        repository.launchApp(appInfo.packageName, displayId)
                     }
-                    val names = sortedAppList.map { app ->
-                        if (app.packageName in recentPkgs) "${app.name} (最近)" else app.name
-                    }.toTypedArray()
-                    android.app.AlertDialog.Builder(this@DisplayActivity)
-                        .setTitle("选择要在该屏幕启动的应用")
-                        .setItems(names) { _, which ->
-                            val selectedApp = sortedAppList[which]
-                            val id = remoteDisplayId ?: return@setItems
-                            lifecycleScope.launch {
-                                repository.launchApp(selectedApp.packageName, id)
-                            }
-                        }
-                        .setNegativeButton("取消", null)
-                        .show()
                 }
-            }.onFailure { e ->
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                    android.app.AlertDialog.Builder(this@DisplayActivity)
-                        .setTitle("选择应用")
-                        .setMessage("加载应用列表失败: ${e.message}")
-                        .setNegativeButton("取消", null)
-                        .show()
-                }
-            }
+            )
         }
     }
 }
