@@ -29,4 +29,18 @@ object NetUtils {
     fun resolveConnectHost(host: String): String {
         return if (host == ANY_HOST) LOCAL_HOST else host
     }
+
+    /**
+     * 测试 host:port 是否能建立 TCP 连接（需在 IO 线程调用）
+     */
+    fun testConnection(host: String, port: Int, timeoutMs: Int = 3000): Result<Unit> {
+        return try {
+            Socket().use { s ->
+                s.connect(InetSocketAddress(host, port), timeoutMs)
+            }
+            Result.success(Unit)
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+    }
 }

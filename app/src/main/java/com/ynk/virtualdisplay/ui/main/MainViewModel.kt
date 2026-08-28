@@ -138,6 +138,7 @@ class MainViewModel(
             
             is MainIntent.SelectServerNode -> selectServerNode(intent.node)
             is MainIntent.AddServerNode -> addServerNode(intent.node)
+            is MainIntent.EditServerNode -> editServerNode(intent.oldNode, intent.newNode)
             is MainIntent.RemoveServerNode -> removeServerNode(intent.node)
             is MainIntent.UpdatePrivilegeMode -> updatePrivilegeMode(intent.mode)
             is MainIntent.CheckRootPermission -> checkRootPermission()
@@ -190,6 +191,16 @@ class MainViewModel(
     private fun addServerNode(node: com.ynk.virtualdisplay.data.ServerNode) {
         viewModelScope.launch {
             AppSettings.addServerNode(appContext, node)
+        }
+    }
+
+    private fun editServerNode(oldNode: com.ynk.virtualdisplay.data.ServerNode, newNode: com.ynk.virtualdisplay.data.ServerNode) {
+        viewModelScope.launch {
+            AppSettings.updateServerNode(appContext, oldNode, newNode)
+            val current = _uiState.value.currentServerNode
+            if (current.host == oldNode.host && current.port == oldNode.port) {
+                selectServerNode(newNode)
+            }
         }
     }
 

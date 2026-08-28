@@ -34,11 +34,12 @@ import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import com.ynk.virtualdisplay.ui.components.AppSelectionDialog
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
+import org.koin.core.qualifier.named
 
 @SuppressLint("ClickableViewAccessibility", "UseKtx")
 class DisplayActivity : ComponentActivity() {
@@ -79,6 +80,8 @@ class DisplayActivity : ComponentActivity() {
 
     private val interactor: com.ynk.virtualdisplay.domain.DisplayInteractor by inject()
     private val displayMetricsManager: DisplayMetricsManager by inject()
+    // 应用级后台作用域：生命周期跟随进程，用于 Activity 销毁后的 fire-and-forget 清理任务
+    private val backgroundScope: CoroutineScope by inject(qualifier = named("appBackgroundScope"))
     
     private val repository: IDisplayRepository by lazy {
         val key = nodeKey
@@ -190,10 +193,10 @@ class DisplayActivity : ComponentActivity() {
             dm.unregisterDisplayListener(displayListener)
         }
         // 退出操控页：销毁 ROLE_VIDEO + ROLE_CONTROL 流通道（保留 negotiation 与显示器）。
-        // 不依赖 lifecycleScope（onDestroy 时已取消），用独立 GlobalScope 触发，确保下次
+        // 不依赖 lifecycleScope（onDestroy 时已取消），用应用级后台作用域触发，确保下次
         // 进入重建全新通道，避免复用被服务端关闭的 control socket。
         if (remoteDisplayId != null) {
-            GlobalScope.launch(Dispatchers.IO) {
+            backgroundScope.launch {
                 runCatching { repository.stopStreaming() }.onFailure {
                     Log.w(TAG, "stopStreaming on destroy failed", it)
                 }

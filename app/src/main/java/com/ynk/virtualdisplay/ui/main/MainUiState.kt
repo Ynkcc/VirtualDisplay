@@ -81,6 +81,7 @@ sealed class MainIntent {
     // 外部服务端及特权切换 Intent
     data class SelectServerNode(val node: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
     data class AddServerNode(val node: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
+    data class EditServerNode(val oldNode: com.ynk.virtualdisplay.data.ServerNode, val newNode: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
     data class RemoveServerNode(val node: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
     data class UpdatePrivilegeMode(val mode: com.ynk.virtualdisplay.data.PrivilegeMode) : MainIntent()
     data object CheckRootPermission : MainIntent()

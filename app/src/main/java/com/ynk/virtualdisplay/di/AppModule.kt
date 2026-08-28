@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.viewModel
+import org.koin.core.qualifier.named
 import org.koin.dsl.module
 
 /**
@@ -50,6 +51,12 @@ val appModule = module {
     // 注意：这是跨组件共享的单例 Scope，任何地方都不得对其调用 cancel()，
     // 否则会不可逆地破坏 VideoStreamController 等所有使用者。
     single { CoroutineScope(Dispatchers.Main + SupervisorJob() + ExceptionUtils.coroutineExceptionHandler("VideoStreamController")) }
+
+    // 应用级后台 Scope：用于 fire-and-forget 的清理/异步任务（如 Activity 销毁后
+    // 仍需执行的 stopStreaming）。生命周期跟随应用进程，不随某个组件的 cancel 失效。
+    single(named("appBackgroundScope")) {
+        CoroutineScope(Dispatchers.IO + SupervisorJob() + ExceptionUtils.coroutineExceptionHandler("AppBackground"))
+    }
 
     single { VideoStreamController(get(), get(), get()) }
 

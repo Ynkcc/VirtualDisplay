@@ -441,7 +441,7 @@ fun SettingsScreen(
                             }
                         )
 
-                        val addressesStr = remember(serverHost, localIps) {
+                        val addressItems = remember(serverHost, localIps) {
                             val list = mutableListOf<String>()
                             if (serverHost == NetUtils.ANY_HOST) {
                                 list.addAll(localIps)
@@ -451,25 +451,24 @@ fun SettingsScreen(
                             if (!list.contains(NetUtils.LOCAL_HOST)) {
                                 list.add(NetUtils.LOCAL_HOST)
                             }
-                            list.joinToString(", ")
+                            list
                         }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
                             Text(
-                                text = "实际监听的网卡地址",
+                                text = "监听地址",
                                 fontSize = 13.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Text(
-                                text = addressesStr,
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontWeight = FontWeight.Medium
-                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            addressItems.forEach { addr ->
+                                Text(
+                                    text = addr,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
 
                         Row(
@@ -635,7 +634,9 @@ private fun getLocalIpAddresses(): List<String> {
             while (addresses.hasMoreElements()) {
                 val address = addresses.nextElement()
                 if (address is java.net.Inet4Address) {
-                    address.hostAddress?.let { ipList.add(it) }
+                    address.hostAddress?.let { ip ->
+                        ipList.add("${networkInterface.name} ($ip)")
+                    }
                 }
             }
         }

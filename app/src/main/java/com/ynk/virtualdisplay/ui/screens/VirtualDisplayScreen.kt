@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,8 +42,18 @@ import com.ynk.virtualdisplay.ui.main.MainIntent
 import com.ynk.virtualdisplay.ui.main.MainViewModel
 import com.ynk.virtualdisplay.ui.components.DisplayItem
 import com.ynk.virtualdisplay.ui.components.AppSelectionDialog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class DisplayPreset(val name: String, val width: Int, val height: Int, val dpi: Int)
+
+private sealed interface ConnectionTestState {
+    data object Idle : ConnectionTestState
+    data object Testing : ConnectionTestState
+    data object Success : ConnectionTestState
+    data class Fail(val message: String) : ConnectionTestState
+}
 
 @Composable
 fun VirtualDisplayScreen(
@@ -183,6 +194,7 @@ fun VirtualDisplayScreen(
 
                 var dropdownExpanded by remember { mutableStateOf(false) }
                 var showAddDialog by remember { mutableStateOf(false) }
+                var editingNode by remember { mutableStateOf<com.ynk.virtualdisplay.data.ServerNode?>(null) }
 
                 Box {
                     Row(
@@ -228,6 +240,20 @@ fun VirtualDisplayScreen(
                                             IconButton(
                                                 onClick = {
                                                     dropdownExpanded = false
+                                                    editingNode = node
+                                                },
+                                                modifier = Modifier.size(24.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Edit,
+                                                    contentDescription = "编辑设备",
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = {
+                                                    dropdownExpanded = false
                                                     viewModel.handleIntent(MainIntent.RemoveServerNode(node))
                                                 },
                                                 modifier = Modifier.size(24.dp)
@@ -264,6 +290,29 @@ fun VirtualDisplayScreen(
                     var addHost by remember { mutableStateOf("") }
                     var addPort by remember { mutableStateOf("27183") }
                     var addPassword by remember { mutableStateOf("") }
+                    var testState by remember { mutableStateOf<ConnectionTestState>(ConnectionTestState.Idle) }
+                    val testScope = rememberCoroutineScope()
+
+                    fun runConnectionTest() {
+                        if (addHost.isBlank()) {
+                            testState = ConnectionTestState.Fail("请先填写设备 IP")
+                            return
+                        }
+                        val portNum = addPort.toIntOrNull() ?: 27183
+                        testState = ConnectionTestState.Testing
+                        testScope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                NetUtils.testConnection(addHost, portNum)
+                            }
+                            testState = if (result.isSuccess) {
+                                ConnectionTestState.Success
+                            } else {
+                                ConnectionTestState.Fail(
+                                    NetUtils.getFriendlyErrorMessage(result.exceptionOrNull() ?: RuntimeException("未知连接错误"))
+                                )
+                            }
+                        }
+                    }
 
                     AlertDialog(
                         onDismissRequest = { showAddDialog = false },
@@ -279,14 +328,20 @@ fun VirtualDisplayScreen(
                                 )
                                 OutlinedTextField(
                                     value = addHost,
-                                    onValueChange = { addHost = it },
+                                    onValueChange = {
+                                        addHost = it
+                                        testState = ConnectionTestState.Idle
+                                    },
                                     label = { Text("设备 IP") },
                                     placeholder = { Text("192.168.1.100") },
                                     singleLine = true
                                 )
                                 OutlinedTextField(
                                     value = addPort,
-                                    onValueChange = { addPort = it.filter { c -> c.isDigit() } },
+                                    onValueChange = {
+                                        addPort = it.filter { c -> c.isDigit() }
+                                        testState = ConnectionTestState.Idle
+                                    },
                                     label = { Text("设备端口") },
                                     placeholder = { Text("27183") },
                                     singleLine = true
@@ -297,6 +352,30 @@ fun VirtualDisplayScreen(
                                     label = { Text("连接密码 (可选)") },
                                     singleLine = true
                                 )
+                                OutlinedButton(
+                                    onClick = { runConnectionTest() },
+                                    enabled = testState != ConnectionTestState.Testing,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    when (testState) {
+                                        ConnectionTestState.Testing -> Text("正在测试连接...")
+                                        ConnectionTestState.Success -> Text("测试连接 ✓")
+                                        else -> Text("测试连接")
+                                    }
+                                }
+                                when (val state = testState) {
+                                    is ConnectionTestState.Fail -> Text(
+                                        text = state.message,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    ConnectionTestState.Success -> Text(
+                                        text = "连接成功",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF26A69A)
+                                    )
+                                    else -> {}
+                                }
                             }
                         },
                         confirmButton = {
@@ -316,6 +395,68 @@ fun VirtualDisplayScreen(
                         },
                         dismissButton = {
                             TextButton(onClick = { showAddDialog = false }) {
+                                Text("取消")
+                            }
+                        }
+                    )
+                }
+
+                editingNode?.let { node ->
+                    var editName by remember(node) { mutableStateOf(node.name) }
+                    var editHost by remember(node) { mutableStateOf(node.host) }
+                    var editPort by remember(node) { mutableStateOf(node.port.toString()) }
+                    var editPassword by remember(node) { mutableStateOf(node.password) }
+
+                    AlertDialog(
+                        onDismissRequest = { editingNode = null },
+                        title = { Text("编辑外部设备") },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = editName,
+                                    onValueChange = { editName = it },
+                                    label = { Text("设备名称") },
+                                    placeholder = { Text("例: 电视") },
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = editHost,
+                                    onValueChange = { editHost = it },
+                                    label = { Text("设备 IP") },
+                                    placeholder = { Text("192.168.1.100") },
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = editPort,
+                                    onValueChange = { editPort = it.filter { c -> c.isDigit() } },
+                                    label = { Text("设备端口") },
+                                    placeholder = { Text("27183") },
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = editPassword,
+                                    onValueChange = { editPassword = it },
+                                    label = { Text("连接密码 (可选)") },
+                                    singleLine = true
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    val portNum = editPort.toIntOrNull() ?: 27183
+                                    if (editName.isNotEmpty() && editHost.isNotEmpty()) {
+                                        val newNode = com.ynk.virtualdisplay.data.ServerNode(editName, editHost, portNum, editPassword)
+                                        viewModel.handleIntent(MainIntent.EditServerNode(node, newNode))
+                                        editingNode = null
+                                    }
+                                }
+                            ) {
+                                Text("保存")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { editingNode = null }) {
                                 Text("取消")
                             }
                         }

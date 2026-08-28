@@ -458,6 +458,19 @@ object AppSettings {
         context.applicationContext.dataStore.edit { it[serverNodesKey] = serialized }
     }
 
+    suspend fun updateServerNode(context: Context, oldNode: ServerNode, newNode: ServerNode) {
+        val currentList = getServerNodes(context).toMutableList()
+        val index = currentList.indexOfFirst { it.host == oldNode.host && it.port == oldNode.port }
+        if (index >= 0) {
+            currentList[index] = newNode
+        } else {
+            currentList.removeAll { it.host == newNode.host && it.port == newNode.port }
+            currentList.add(newNode)
+        }
+        val serialized = currentList.joinToString(",") { it.toSerializedString() }
+        context.applicationContext.dataStore.edit { it[serverNodesKey] = serialized }
+    }
+
     suspend fun setCurrentServerNode(context: Context, node: ServerNode) {
         // 仅写入节点身份，不覆写用户配置的监听地址/端口/密码
         context.applicationContext.dataStore.edit { prefs ->
