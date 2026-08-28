@@ -1,5 +1,7 @@
 package com.ynk.virtualdisplay.ui.main
 
+import com.ynk.virtualdisplay.data.PrivilegeMode
+import com.ynk.virtualdisplay.data.ServerNode
 import com.ynk.virtualdisplay.data.model.ShizukuState
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.util.NetUtils
@@ -44,9 +46,9 @@ data class MainUiState(
     val inputDpi: String = "",
     
     // 权限与设备切换状态
-    val privilegeMode: com.ynk.virtualdisplay.data.PrivilegeMode = com.ynk.virtualdisplay.data.PrivilegeMode.SHIZUKU,
-    val serverNodes: List<com.ynk.virtualdisplay.data.ServerNode> = emptyList(),
-    val currentServerNode: com.ynk.virtualdisplay.data.ServerNode = com.ynk.virtualdisplay.data.ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""),
+    val privilegeMode: PrivilegeMode = PrivilegeMode.SHIZUKU,
+    val serverNodes: List<ServerNode> = emptyList(),
+    val currentServerNode: ServerNode = ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""),
     val rootAvailable: Boolean = false,
     val rootChecking: Boolean = false
 )
@@ -56,8 +58,8 @@ data class MainUiState(
  * ViewModel 通过 [MainViewModel.handleIntent] 统一分发。
  */
 sealed class MainIntent {
-    /** 检查 Shizuku 状态 */
-    data object CheckShizuku : MainIntent()
+    /** 应用入口初始化连接（不做特权检查，特权仅在拉起本机 daemon 时校验） */
+    data object InitializeConnection : MainIntent()
     /** 请求 Shizuku 权限 */
     data object RequestShizukuPermission : MainIntent()
     /** 刷新显示器列表 */
@@ -82,11 +84,11 @@ sealed class MainIntent {
     data object Reconnect : MainIntent()
 
     // 外部服务端及特权切换 Intent
-    data class SelectServerNode(val node: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
-    data class AddServerNode(val node: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
-    data class EditServerNode(val oldNode: com.ynk.virtualdisplay.data.ServerNode, val newNode: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
-    data class RemoveServerNode(val node: com.ynk.virtualdisplay.data.ServerNode) : MainIntent()
-    data class UpdatePrivilegeMode(val mode: com.ynk.virtualdisplay.data.PrivilegeMode) : MainIntent()
+    data class SelectServerNode(val node: ServerNode) : MainIntent()
+    data class AddServerNode(val node: ServerNode) : MainIntent()
+    data class EditServerNode(val oldNode: ServerNode, val newNode: ServerNode) : MainIntent()
+    data class RemoveServerNode(val node: ServerNode) : MainIntent()
+    data class UpdatePrivilegeMode(val mode: PrivilegeMode) : MainIntent()
     data object CheckRootPermission : MainIntent()
     data object StartServer : MainIntent()
     data object StopServer : MainIntent()

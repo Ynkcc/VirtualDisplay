@@ -30,8 +30,10 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.ynk.virtualdisplay.R
-import com.ynk.virtualdisplay.data.AppSettings
+import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
+import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
+import com.ynk.virtualdisplay.domain.DisplayInteractor
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import com.ynk.virtualdisplay.ui.components.AppSelectionDialog
 import kotlinx.coroutines.CoroutineScope
@@ -70,7 +72,10 @@ class DisplayActivity : ComponentActivity() {
 
     private var resizeJob: Job? = null
     private var remoteDisplayMonitorJob: Job? = null
-    private val isLocalNode: Boolean = AppSettings.getCurrentServerNodeSync().isLocal
+    // 本地配置门面（T2）：替代直接访问 AppSettings 单例，统一收敛本地配置读写。
+    private val settingsDataSource: AppSettingsDataSource by inject()
+    private val isLocalNode: Boolean
+        get() = settingsDataSource.getCurrentServerNodeSync().isLocal
 
     private lateinit var rootLayout: FrameLayout
     private lateinit var videoSurfaceView: VideoSurfaceView
@@ -78,7 +83,7 @@ class DisplayActivity : ComponentActivity() {
     private lateinit var controlPanel: DisplayControlPanel
     private lateinit var inputController: InputController
 
-    private val interactor: com.ynk.virtualdisplay.domain.DisplayInteractor by inject()
+    private val interactor: DisplayInteractor by inject()
     private val displayMetricsManager: DisplayMetricsManager by inject()
     // 应用级后台作用域：生命周期跟随进程，用于 Activity 销毁后的 fire-and-forget 清理任务
     private val backgroundScope: CoroutineScope by inject(qualifier = named("appBackgroundScope"))
@@ -134,7 +139,7 @@ class DisplayActivity : ComponentActivity() {
 
         backCallback = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (AppSettings.captureBackCache.value) {
+                if (settingsDataSource.captureBackCache.value) {
                     inputController.injectKey(KeyEvent.KEYCODE_BACK)
                 } else {
                     isEnabled = false
@@ -146,13 +151,13 @@ class DisplayActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, backCallback)
 
         lifecycleScope.launch {
-            AppSettings.captureBackCache.collect { capture ->
+            settingsDataSource.captureBackCache.collect { capture ->
                 backCallback.isEnabled = capture
             }
         }
 
         lifecycleScope.launch {
-            AppSettings.showPerformanceStatsCache.collect { show ->
+            settingsDataSource.showPerformanceStatsCache.collect { show ->
                 if (::statsOverlay.isInitialized) {
                     statsOverlay.visibility = if (show) View.VISIBLE else View.GONE
                 }
@@ -392,9 +397,9 @@ class DisplayActivity : ComponentActivity() {
                 }
             }
 
-            // 最后回退：从 AppSettings 读缓存（所有节点通用）
-            val node = AppSettings.getCurrentServerNodeSync()
-            val saved = AppSettings.getDisplaysForServer(this@DisplayActivity, node).find { it.id == displayId }
+            // 最后回退：从本地配置读缓存（所有节点通用）
+            val node = settingsDataSource.getCurrentServerNodeSync()
+            val saved = settingsDataSource.getDisplaysForServer(node).find { it.id == displayId }
             if (saved != null) {
                 val isFirstDiscovery = (videoWidth == 0 && videoHeight == 0)
                 kotlinx.coroutines.withContext(Dispatchers.Main) {
@@ -417,8 +422,8 @@ class DisplayActivity : ComponentActivity() {
         // 1. 即时路径：监听连接状态变化
         lifecycleScope.launch {
             repository.connectionStatus.collect { status ->
-                if (status == com.ynk.virtualdisplay.data.repository.ConnectionStatus.DISCONNECTED ||
-                    status == com.ynk.virtualdisplay.data.repository.ConnectionStatus.ERROR
+                if (status == ConnectionStatus.DISCONNECTED ||
+                    status == ConnectionStatus.ERROR
                 ) {
                     Log.w(TAG, "Connection status=$status, finishing activity")
                     finish()
@@ -590,7 +595,7 @@ class DisplayActivity : ComponentActivity() {
     @SuppressLint("RestrictedApi", "GestureBackNavigation")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
-            if (AppSettings.captureBackCache.value) {
+            if (settingsDataSource.captureBackCache.value) {
                 if (event.action == KeyEvent.ACTION_UP) {
                     inputController.injectKey(KeyEvent.KEYCODE_BACK)
                 }

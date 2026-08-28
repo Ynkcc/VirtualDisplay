@@ -136,8 +136,8 @@ fun VirtualDisplayScreen(
                 )
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val isLocal = uiState.currentServerNode.host == "127.0.0.1" || uiState.currentServerNode.host == "localhost"
-                    val isLocalPrivileged = isLocal && uiState.privilegeMode != com.ynk.virtualdisplay.data.PrivilegeMode.NONE
+                    val isLocalPrivileged = uiState.currentServerNode.isLocal &&
+                        uiState.privilegeMode != com.ynk.virtualdisplay.data.PrivilegeMode.NONE
                     if (!isLocalPrivileged) {
                         val isBinding = uiState.connectionStatus == com.ynk.virtualdisplay.data.repository.ConnectionStatus.BINDING
                         TextButton(

@@ -1,75 +1,55 @@
 package com.ynk.virtualdisplay.net
 
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.InputStream
 import java.io.OutputStream
-import java.io.IOException
 import java.nio.charset.StandardCharsets
 
 internal object DaemonHandshake {
+    /**
+     * 注意：不能用 `DataOutputStream(out).use { ... }`——`use` 会调用 close，
+     * 而 close 会连带关闭传入的底层 [OutputStream]。调用方（DaemonTransport）
+     * 会在同一个输出流上连续调用 writeRole / writeSessionId / writeDisplayId /
+     * writeToken，若关闭底层流会破坏后续握手。因此这里只 `apply + flush`，
+     * 绝不关闭传入的流。
+     */
     fun writeRole(out: OutputStream, role: Int) {
-        out.write(role)
-        out.flush()
+        DataOutputStream(out).apply { writeByte(role); flush() }
     }
 
     fun writeSessionId(out: OutputStream, sessionId: Int) {
-        out.write((sessionId ushr 24) and 0xFF)
-        out.write((sessionId ushr 16) and 0xFF)
-        out.write((sessionId ushr 8) and 0xFF)
-        out.write(sessionId and 0xFF)
-        out.flush()
+        DataOutputStream(out).apply { writeInt(sessionId); flush() }
     }
 
     fun writeDisplayId(out: OutputStream, displayId: Int) {
-        out.write((displayId ushr 24) and 0xFF)
-        out.write((displayId ushr 16) and 0xFF)
-        out.write((displayId ushr 8) and 0xFF)
-        out.write(displayId and 0xFF)
-        out.flush()
+        DataOutputStream(out).apply { writeInt(displayId); flush() }
     }
 
     fun writeToken(out: OutputStream, token: String) {
-        val bytes = token.toByteArray(StandardCharsets.UTF_8)
-        // 4 字节 Big-Endian 长度 + UTF-8 token bytes
-        out.write((bytes.size ushr 24) and 0xFF)
-        out.write((bytes.size ushr 16) and 0xFF)
-        out.write((bytes.size ushr 8) and 0xFF)
-        out.write(bytes.size and 0xFF)
-        out.write(bytes)
-        out.flush()
+        DataOutputStream(out).apply {
+            val bytes = token.toByteArray(StandardCharsets.UTF_8)
+            // 4 字节 Big-Endian 长度 + 标准 UTF-8 token bytes
+            writeInt(bytes.size)
+            write(bytes)
+            flush()
+        }
     }
 
     fun readSessionId(input: InputStream): Int {
-        val b1 = input.read()
-        val b2 = input.read()
-        val b3 = input.read()
-        val b4 = input.read()
-        if (b1 < 0 || b2 < 0 || b3 < 0 || b4 < 0) {
-            throw IOException("Connection closed before sessionId received")
-        }
-        return (b1 shl 24) or (b2 shl 16) or (b3 shl 8) or b4
+        // DataInputStream.readInt() 在 EOF 时抛 EOFException（IOException 子类），与原语义兼容
+        return DataInputStream(input).readInt()
     }
 
     fun readInt32(input: InputStream): Int {
-        val b1 = input.read()
-        val b2 = input.read()
-        val b3 = input.read()
-        val b4 = input.read()
-        if (b1 < 0 || b2 < 0 || b3 < 0 || b4 < 0) {
-            throw IOException("Connection closed before 32-bit value received")
-        }
-        return (b1 shl 24) or (b2 shl 16) or (b3 shl 8) or b4
+        // DataInputStream.readInt() 在 EOF 时抛 EOFException（IOException 子类），与原语义兼容
+        return DataInputStream(input).readInt()
     }
 
     fun readDeviceMeta(input: InputStream): String {
         val bytes = ByteArray(64)
-        var read = 0
-        while (read < 64) {
-            val count = input.read(bytes, read, 64 - read)
-            if (count < 0) {
-                throw IOException("Connection closed before device name received")
-            }
-            read += count
-        }
+        // readFully 在 EOF 时抛 EOFException（IOException 子类），与原语义兼容
+        DataInputStream(input).readFully(bytes)
         // 剥离尾部的 null 填充字节
         var length = 64
         for (i in 0 until 64) {

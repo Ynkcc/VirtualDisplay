@@ -39,7 +39,7 @@ import org.koin.dsl.module
  */
 val appModule = module {
     // === 核心基础设施层 ===
-    single { DaemonProcessController(androidContext()) }
+    single { DaemonProcessController(androidContext(), get()) }
     single { DaemonTransport() }
     single { DaemonRpc(get()) }
     // 先注册实现类，再分别绑定两个接口（都指向同一个单例实例）
@@ -47,18 +47,30 @@ val appModule = module {
     // VideoStreamRpc：视频流 RPC（供 VideoStreamController 使用）
     single { DaemonControlApiImpl(get(), get()) }
     single<DaemonControlApi> { get<DaemonControlApiImpl>() }
-    // VideoStreamController 使用的协程 Scope：主线程调度器 + SupervisorJob + 异常处理器
-    // 注意：这是跨组件共享的单例 Scope，任何地方都不得对其调用 cancel()，
-    // 否则会不可逆地破坏 VideoStreamController 等所有使用者。
-    single { CoroutineScope(Dispatchers.Main + SupervisorJob() + ExceptionUtils.coroutineExceptionHandler("VideoStreamController")) }
+    /**
+     * 进程级守护 Scope（named("processScope")）。
+     *
+     * 生命周期：跟随应用进程，随进程结束而终结，绝不因某个组件的 cancel() 失效。
+     *
+     * 归属与共享：由本模块（进程级）创建并独占管理，供多个跨组件共享的"长驻"组件使用——
+     * 主要是 [VideoStreamController]（视频流 ping 循环）与 [MultiConnectionRepository]（仓库编排）。
+     *
+     * 硬性约束：任何组件（VideoStreamController / MultiConnectionRepository / ConnectionSlot 等）
+     * 都严禁对其调用 cancel()，否则会不可逆地破坏全部使用者。与其相对的是 ConnectionSlot 内部
+     * 自建的可 cancel 槽级 scope——那是"谁创建谁负责关闭"的资源容器 scope，由 ConnectionSlot
+     * 在 destroyService 中自行 cancel，二者用不同构造入口/命名严格区分，避免误 cancel。
+     */
+    single(named("processScope")) { CoroutineScope(Dispatchers.Main + SupervisorJob() + ExceptionUtils.coroutineExceptionHandler("VideoStreamController")) }
 
     // 应用级后台 Scope：用于 fire-and-forget 的清理/异步任务（如 Activity 销毁后
-    // 仍需执行的 stopStreaming）。生命周期跟随应用进程，不随某个组件的 cancel 失效。
+    // 仍需执行的 stopStreaming）。生命周期同样跟随应用进程，不随某个组件的 cancel 失效。
+    // 与 [processScope] 的关系：二者都是进程级、不可 cancel 的守护 Scope；区别仅在调度器——
+    // processScope 跑在 Main（长驻交互组件），此处跑在 IO（一次性后台清理）。
     single(named("appBackgroundScope")) {
         CoroutineScope(Dispatchers.IO + SupervisorJob() + ExceptionUtils.coroutineExceptionHandler("AppBackground"))
     }
 
-    single { VideoStreamController(get(), get(), get()) }
+    single { VideoStreamController(get(), get(), get(named("processScope")), get()) }
 
     // === Data 层 DataSource ===
     // Local：  AppSettings / DaemonPrefs 本地配置读写
@@ -66,15 +78,14 @@ val appModule = module {
     // Process：Daemon 进程生命周期控制（本机节点独有）
     single { AppSettingsDataSource(androidContext()) }
     single { DaemonRemoteDataSource(get()) }
-    single { DaemonProcessDataSource(get()) }
+    // DaemonProcessDataSource 是特权检查的唯一汇聚点，故注入其判定所需的配置与 Shizuku 状态。
+    single { DaemonProcessDataSource(get(), get(), get()) }
 
     // === Multi-Connection Infrastructure ===
     single {
         ConnectionSlotFactory(
-            context = androidContext(),
             settingsDataSource = get(),
-            processDataSource = get(),
-            shizukuManager = get()
+            processDataSource = get()
         )
     }
 
@@ -83,16 +94,16 @@ val appModule = module {
     single<IDisplayRepository> {
         MultiConnectionRepository(
             slotFactory = get(),
-            scope = get() // Using the same scope as VideoStreamController
+            scope = get(named("processScope")) // 与 VideoStreamController 共享进程级守护 Scope，不可 cancel
         )
     }
 
     // === 领域层 ===
     single {
         DisplayInteractor(
-            context = androidContext(),
             repository = get(),
-            shizukuManager = get()
+            processDataSource = get(),
+            settingsDataSource = get()
         )
     }
 
@@ -102,7 +113,7 @@ val appModule = module {
             interactor = get(),
             shizukuManager = get(),
             displayMetricsManager = get(),
-            context = androidContext()
+            settingsDataSource = get()
         )
     }
 }

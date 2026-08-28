@@ -8,7 +8,6 @@ import com.ynk.virtualdisplay.protocol.DeviceMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 多连接路由层：管理所有 [ConnectionSlot]，并实现 [IDisplayRepository]（路由到活跃槽）。
@@ -32,13 +31,15 @@ class MultiConnectionRepository(
         private const val TAG = "MultiConnectionRepo"
     }
 
-    private val slots = ConcurrentHashMap<String, ConnectionSlot>()
+    /** 唯一的槽状态源：nodeKey → ConnectionSlot，所有增删改都必须经 [MutableStateFlow.update] 修改。 */
+    private val _slots = MutableStateFlow<Map<String, ConnectionSlot>>(emptyMap())
 
     private val _activeNodeKey = MutableStateFlow<String?>(null)
-    
-    private val activeSlotFlow: StateFlow<ConnectionSlot?> = _activeNodeKey
-        .map { key -> if (key == null) null else slots[key] }
-        .stateIn(scope, SharingStarted.Eagerly, null)
+
+    /** 由 [activeNodeKey] 与 [slots] 共同推导，两者任一变化都会重新计算活跃槽。 */
+    private val activeSlotFlow: StateFlow<ConnectionSlot?> = combine(_activeNodeKey, _slots) { key, slotsMap ->
+        key?.let { slotsMap[it] }
+    }.stateIn(scope, SharingStarted.Eagerly, null)
 
     private val activeSlot: ConnectionSlot?
         get() = activeSlotFlow.value
@@ -47,7 +48,11 @@ class MultiConnectionRepository(
 
     override fun connectNode(node: ServerNode) {
         val key = node.uniqueKey()
-        val slot = slots.getOrPut(key) { slotFactory.create(node) }
+        val existing = _slots.value[key]
+        val slot = existing ?: slotFactory.create(node)
+        if (existing == null) {
+            _slots.update { it + (key to slot) }
+        }
         slot.bindService()
         if (_activeNodeKey.value == null) _activeNodeKey.value = key
         Log.i(TAG, "connectNode: ${node.name} (${node.host}:${node.port}), activeNode=${_activeNodeKey.value}")
@@ -55,30 +60,31 @@ class MultiConnectionRepository(
 
     override fun disconnectNode(node: ServerNode, killDaemon: Boolean) {
         val key = node.uniqueKey()
-        val slot = slots.remove(key) ?: return
+        val slot = _slots.value[key] ?: return
+        _slots.update { it - key }
         if (killDaemon) {
             slot.destroyService()
         } else {
             slot.unbindService()
         }
         if (_activeNodeKey.value == key) {
-            _activeNodeKey.value = slots.keys.firstOrNull()
+            _activeNodeKey.value = _slots.value.keys.firstOrNull()
         }
         Log.i(TAG, "disconnectNode: ${node.name}, new activeNode=${_activeNodeKey.value}")
     }
 
     override fun setActiveNode(node: ServerNode) {
         val key = node.uniqueKey()
-        if (!slots.containsKey(key)) {
+        if (!_slots.value.containsKey(key)) {
             connectNode(node)
         }
         _activeNodeKey.value = key
         Log.i(TAG, "setActiveNode: ${node.name}")
     }
 
-    override fun getSlot(nodeKey: String): IDisplayRepository? = slots[nodeKey]
+    override fun getSlot(nodeKey: String): IDisplayRepository? = _slots.value[nodeKey]
 
-    override fun allSlots(): Collection<IDisplayRepository> = slots.values
+    override fun allSlots(): Collection<IDisplayRepository> = _slots.value.values
 
     // ====================== IDisplayRepository 路由 ======================
 
@@ -106,7 +112,10 @@ class MultiConnectionRepository(
     override fun unbindService() { activeSlot?.unbindService() }
     override suspend fun startDaemon(): Result<Unit> = activeSlot?.startDaemon() ?: Result.failure(noActiveSlotError())
     override suspend fun stopDaemon(): Result<Unit> = activeSlot?.stopDaemon() ?: Result.failure(noActiveSlotError())
-    override fun destroyService() { slots.values.forEach { it.destroyService() }; slots.clear() }
+    override fun destroyService() {
+        _slots.value.values.forEach { it.destroyService() }
+        _slots.update { emptyMap() }
+    }
     override fun refreshDisplays() { activeSlot?.refreshDisplays() }
 
     override suspend fun createDisplay(name: String, width: Int, height: Int, dpi: Int, flags: Int, mirrorDisplayId: Int): Result<Int> =

@@ -1,11 +1,9 @@
 package com.ynk.virtualdisplay.data.repository
 
-import android.content.Context
 import com.ynk.virtualdisplay.data.ServerNode
 import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
 import com.ynk.virtualdisplay.data.process.DaemonProcessDataSource
 import com.ynk.virtualdisplay.data.remote.DaemonRemoteDataSource
-import com.ynk.virtualdisplay.manager.ShizukuManager
 import com.ynk.virtualdisplay.net.DaemonTransport
 import com.ynk.virtualdisplay.rpc.DaemonControlApiImpl
 import com.ynk.virtualdisplay.rpc.DaemonRpc
@@ -22,10 +20,8 @@ import kotlinx.coroutines.SupervisorJob
  * 远程节点的 [ConnectionSlot.processDataSource] 为 null。
  */
 class ConnectionSlotFactory(
-    private val context: Context,
     private val settingsDataSource: AppSettingsDataSource,
     private val processDataSource: DaemonProcessDataSource,
-    private val shizukuManager: ShizukuManager,
 ) {
     fun create(node: ServerNode): ConnectionSlot {
         // 每个槽独立的基础设施对象
@@ -39,21 +35,19 @@ class ConnectionSlotFactory(
             Dispatchers.Main + SupervisorJob() +
                 ExceptionUtils.coroutineExceptionHandler("VideoStream[${node.uniqueKey()}]")
         )
-        val videoController = VideoStreamController(transport, controlApi, videoScope)
+        val videoController = VideoStreamController(transport, controlApi, videoScope, settingsDataSource)
 
         // 本机节点才持有进程控制权
         val slotProcessDataSource = if (node.isLocal) processDataSource else null
 
         return ConnectionSlot(
             node = node,
-            context = context,
             settingsDataSource = settingsDataSource,
             remoteDataSource = remoteDataSource,
             processDataSource = slotProcessDataSource,
             transport = transport,
             rpc = rpc,
             videoController = videoController,
-            shizukuManager = shizukuManager,
         )
     }
 }

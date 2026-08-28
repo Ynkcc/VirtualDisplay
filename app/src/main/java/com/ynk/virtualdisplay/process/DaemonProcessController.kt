@@ -2,16 +2,26 @@ package com.ynk.virtualdisplay.process
 
 import android.content.Context
 import android.util.Log
-import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.DaemonPrefs
 import com.ynk.virtualdisplay.data.PrivilegeMode
+import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
 import com.ynk.virtualdisplay.util.NetUtils
 import rikka.shizuku.Shizuku
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 
-class DaemonProcessController(private val context: Context) {
+/**
+ * 守护进程执行器。
+ *
+ * 仅负责"按当前特权模式选择执行策略"（shizuku / root / 普通 exec）来拉起、查询、
+ * 停止 daemon；它不判定"是否有权"。特权判定由数据层
+ * [com.ynk.virtualdisplay.data.process.DaemonProcessDataSource]（唯一的特权检查点）负责。
+ */
+class DaemonProcessController(
+    private val context: Context,
+    private val settingsDataSource: AppSettingsDataSource,
+) {
 
     companion object {
         private const val TAG = "DaemonProcessController"
@@ -35,7 +45,7 @@ class DaemonProcessController(private val context: Context) {
     }
 
     private fun findDaemonPid(port: Int, address: String? = null): Int {
-        val mode = AppSettings.getPrivilegeModeSync()
+        val mode = settingsDataSource.getPrivilegeModeSync()
         if (mode == PrivilegeMode.NONE) return -1
         return try {
             val portFilter = "daemon_port=$port"
@@ -83,7 +93,7 @@ class DaemonProcessController(private val context: Context) {
     }
 
     fun startDaemon(port: Int, address: String = NetUtils.LOCAL_HOST, password: String? = null): Boolean {
-        val mode = AppSettings.getPrivilegeModeSync()
+        val mode = settingsDataSource.getPrivilegeModeSync()
         if (mode == PrivilegeMode.NONE) {
             Log.i(TAG, "None mode, skipping startDaemon")
             return false
@@ -174,7 +184,7 @@ class DaemonProcessController(private val context: Context) {
     }
 
     private fun isPortOpen(host: String, port: Int): Boolean {
-        val connectHost = if (host == "0.0.0.0") "127.0.0.1" else host
+        val connectHost = NetUtils.resolveConnectHost(host)
         return try {
             Socket().use { s ->
                 s.connect(InetSocketAddress(connectHost, port), PORT_PROBE_TIMEOUT_MS)
@@ -200,7 +210,7 @@ class DaemonProcessController(private val context: Context) {
     }
 
     fun stopDaemon() {
-        val mode = AppSettings.getPrivilegeModeSync()
+        val mode = settingsDataSource.getPrivilegeModeSync()
         if (mode == PrivilegeMode.NONE) {
             Log.i(TAG, "None mode, skipping stopDaemon")
             return
@@ -236,16 +246,30 @@ class DaemonProcessController(private val context: Context) {
         }
     }
 
-    fun isDaemonRunning(): Boolean {
-        val mode = AppSettings.getPrivilegeModeSync()
-        if (mode == PrivilegeMode.NONE) return false
-        val savedPort = daemonPrefs.getSavedPortSync()
-        val port = if (savedPort > 0) savedPort else 27183
-        return findDaemonPid(port) > 0
+    /**
+     * 探测当前设备是否可用 Root（通过 [su] 探测）。
+     * 同步阻塞，仅应在 IO 线程调用。
+     */
+    fun isRootAvailable(): Boolean {
+        var p: Process? = null
+        return try {
+            p = Runtime.getRuntime().exec("su")
+            p.outputStream.use { os ->
+                os.write("exit\n".toByteArray())
+                os.flush()
+            }
+            val exitCode = p.waitFor()
+            exitCode == 0
+        } catch (e: Exception) {
+            Log.e(TAG, "Root probe failed", e)
+            false
+        } finally {
+            try { p?.destroy() } catch (_: Exception) {}
+        }
     }
 
     private fun executeCommand(cmd: Array<String>, env: Array<String>? = null, dir: String? = null): Process? {
-        val mode = AppSettings.getPrivilegeModeSync()
+        val mode = settingsDataSource.getPrivilegeModeSync()
         return when (mode) {
             PrivilegeMode.SHIZUKU -> {
                 invokeNewProcess(cmd, env, dir)

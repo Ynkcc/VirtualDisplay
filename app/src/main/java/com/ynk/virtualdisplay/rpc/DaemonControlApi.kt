@@ -8,6 +8,7 @@ import com.ynk.virtualdisplay.protocol.ControlMessage
 import com.ynk.virtualdisplay.protocol.DeviceMessage
 import com.ynk.virtualdisplay.protocol.ScrcpyControlEncoder
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -51,111 +52,112 @@ class DaemonControlApiImpl(
     private val transport: com.ynk.virtualdisplay.net.DaemonTransport
 ) : DaemonControlApi {
 
-    override suspend fun createDisplay(name: String, w: Int, h: Int, dpi: Int, flags: Int, mirrorDisplayId: Int): Result<Int> {
-        val msg = ControlMessage.CreateVirtualDisplay(name, w, h, dpi, flags, mirrorDisplayId)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode == 0) {
-                Result.success(resp.displayId)
-            } else {
-                Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-            }
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+    companion object {
+        private const val TAG = "DaemonControlApi"
+        /** 默认 RPC 响应超时 */
+        private const val DEFAULT_TIMEOUT_MS = 5_000L
+        /** listApps 在慢设备上逐个 binder 查询，需要更宽松的超时 */
+        private const val LIST_APPS_TIMEOUT_MS = 15_000L
+    }
+
+    // ====================== 统一 RPC 响应处理 ======================
+
+    /**
+     * 发送 [msg] 并等待响应，统一封装：未连上 / 超时 → 失败；类型校验与
+     * 提取失败 → 失败；正常 → 成功。CancellationException 正常向上传播。
+     */
+    private suspend fun <T> sendAndTransform(
+        msg: ControlMessage,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+        transform: (DeviceMessage) -> T,
+    ): Result<T> {
+        val resp = rpc.sendAndAwait(msg, timeoutMs)
+            ?: return Result.failure(IOException("Connection error or timeout"))
+        return try {
+            Result.success(transform(resp))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 
-    override suspend fun releaseDisplay(displayId: Int, moveTasksToDefaultDisplay: Boolean): Result<Unit> {
-        val msg = ControlMessage.ReleaseVirtualDisplay(displayId, moveTasksToDefaultDisplay)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode == 0) {
-                Result.success(Unit)
-            } else {
-                Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-            }
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+    /** 将响应强制解释为 [DeviceMessage.GenericResponse]，否则视为协议错误。 */
+    private fun DeviceMessage.asGenericResponse(): DeviceMessage.GenericResponse =
+        this as? DeviceMessage.GenericResponse
+            ?: throw IllegalStateException("Unexpected response type: $this")
+
+    /** 校验 statusCode，满足则返回自身；否则抛出带服务端 message 的异常。 */
+    private fun DeviceMessage.GenericResponse.requireSuccess(
+        isSuccess: (Int) -> Boolean = { it == 0 },
+    ): DeviceMessage.GenericResponse {
+        if (!isSuccess(statusCode)) {
+            throw IllegalStateException(message ?: "Failed code: $statusCode")
         }
+        return this
     }
 
-    override suspend fun resizeDisplay(displayId: Int, w: Int, h: Int, dpi: Int): Result<Unit> {
-        val msg = ControlMessage.ResizeVirtualDisplay(displayId, w, h, dpi)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode == 0) {
-                Result.success(Unit)
-            } else {
-                Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-            }
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
-        }
-    }
+    // ====================== 显示器管理 ======================
 
-    override suspend fun startActivity(packageName: String, displayId: Int): Result<Int> {
-        val msg = ControlMessage.StartActivity(packageName, displayId)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode >= 0) {
-                Result.success(resp.statusCode)
-            } else {
-                Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-            }
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+    override suspend fun createDisplay(name: String, w: Int, h: Int, dpi: Int, flags: Int, mirrorDisplayId: Int): Result<Int> =
+        sendAndTransform(ControlMessage.CreateVirtualDisplay(name, w, h, dpi, flags, mirrorDisplayId)) { resp ->
+            resp.asGenericResponse().requireSuccess().displayId
         }
-    }
 
-    override suspend fun launchHome(displayId: Int): Result<Int> {
-        val msg = ControlMessage.LaunchHome(displayId)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode == 0) Result.success(resp.displayId)
-            else Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+    override suspend fun releaseDisplay(displayId: Int, moveTasksToDefaultDisplay: Boolean): Result<Unit> =
+        sendAndTransform(ControlMessage.ReleaseVirtualDisplay(displayId, moveTasksToDefaultDisplay)) { resp ->
+            resp.asGenericResponse().requireSuccess()
+            Unit
         }
-    }
 
-    override suspend fun listApps(): Result<List<DeviceMessage.AppEntry>> {
-        val msg = ControlMessage.ListApps
-        // AppLister.listInstalledApps() on a device with hundreds of apps
-        // can take several seconds (per-app PackageManager binder calls).
-        // Give it 15s instead of the default 5s so the client doesn't
-        // timeout spuriously on slow devices.
-        val resp = rpc.sendAndAwait(msg, timeoutMs = 15_000) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.AppsListResponse) {
-            Result.success(resp.apps)
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+    override suspend fun resizeDisplay(displayId: Int, w: Int, h: Int, dpi: Int): Result<Unit> =
+        sendAndTransform(ControlMessage.ResizeVirtualDisplay(displayId, w, h, dpi)) { resp ->
+            resp.asGenericResponse().requireSuccess()
+            Unit
         }
-    }
 
-    override suspend fun getActiveDisplayIds(): Result<IntArray> {
-        val msg = ControlMessage.GetActiveDisplayIds
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.ActiveDisplaysResponse) {
-            Result.success(resp.displayIds)
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+    override suspend fun startActivity(packageName: String, displayId: Int): Result<Int> =
+        sendAndTransform(ControlMessage.StartActivity(packageName, displayId)) { resp ->
+            // 服务端把启动结果编码在 statusCode（>=0 视为成功）
+            resp.asGenericResponse().requireSuccess { it >= 0 }.statusCode
         }
-    }
 
-    override suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>> {
-        val msg = ControlMessage.GetActiveDisplayInfos
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.ActiveDisplayInfosResponse) {
-            Result.success(resp.displays)
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+    override suspend fun launchHome(displayId: Int): Result<Int> =
+        sendAndTransform(ControlMessage.LaunchHome(displayId)) { resp ->
+            resp.asGenericResponse().requireSuccess().displayId
         }
-    }
+
+    // ====================== 应用列表 ======================
+
+    override suspend fun listApps(): Result<List<DeviceMessage.AppEntry>> =
+        sendAndTransform(ControlMessage.ListApps, timeoutMs = LIST_APPS_TIMEOUT_MS) { resp ->
+            val appsResp = resp as? DeviceMessage.AppsListResponse
+                ?: throw IllegalStateException("Unexpected response type: $resp")
+            appsResp.apps
+        }
+
+    // ====================== 显示器查询 ======================
+
+    override suspend fun getActiveDisplayIds(): Result<IntArray> =
+        sendAndTransform(ControlMessage.GetActiveDisplayIds) { resp ->
+            val listResp = resp as? DeviceMessage.ActiveDisplaysResponse
+                ?: throw IllegalStateException("Unexpected response type: $resp")
+            listResp.displayIds
+        }
+
+    override suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>> =
+        sendAndTransform(ControlMessage.GetActiveDisplayInfos) { resp ->
+            val listResp = resp as? DeviceMessage.ActiveDisplayInfosResponse
+                ?: throw IllegalStateException("Unexpected response type: $resp")
+            listResp.displays
+        }
+
+    // ====================== 输入注入 (scrcpy-native via ROLE_CONTROL socket) ======================
 
     override suspend fun injectInput(displayId: Int, event: InputEvent, screenWidth: Int, screenHeight: Int): Result<Boolean> = withContext(Dispatchers.IO) {
         val out = transport.controlOutputStream()
         if (out == null) {
-            Log.e("DaemonControlApi", "injectInput: ROLE_CONTROL socket not connected (displayId=$displayId). Start video streaming first.")
+            Log.e(TAG, "injectInput: ROLE_CONTROL socket not connected (displayId=$displayId). Start video streaming first.")
             return@withContext Result.failure(IllegalStateException("ROLE_CONTROL socket not connected — video must be streaming before injecting input"))
         }
 
@@ -166,7 +168,7 @@ class DaemonControlApiImpl(
                         ScrcpyControlEncoder.encodeKeyCode(stream, event)
                     }
                     if (!ok) {
-                        Log.e("DaemonControlApi", "injectInput: failed to write KEYCODE to ROLE_CONTROL socket (displayId=$displayId)")
+                        Log.e(TAG, "injectInput: failed to write KEYCODE to ROLE_CONTROL socket (displayId=$displayId)")
                         Result.failure(IOException("Failed to write keycode to ROLE_CONTROL socket"))
                     } else {
                         Result.success(true)
@@ -179,7 +181,7 @@ class DaemonControlApiImpl(
                                 ScrcpyControlEncoder.encodeScroll(stream, event, screenWidth, screenHeight)
                             }
                             if (!ok) {
-                                Log.e("DaemonControlApi", "injectInput: failed to write SCROLL to ROLE_CONTROL socket")
+                                Log.e(TAG, "injectInput: failed to write SCROLL to ROLE_CONTROL socket")
                                 Result.failure(IOException("Failed to write scroll to ROLE_CONTROL socket"))
                             } else {
                                 Result.success(true)
@@ -190,7 +192,7 @@ class DaemonControlApiImpl(
                                 ScrcpyControlEncoder.encodeTouchEvent(stream, event, screenWidth, screenHeight)
                             }
                             if (!ok) {
-                                Log.e("DaemonControlApi", "injectInput: failed to write TOUCH to ROLE_CONTROL socket (displayId=$displayId)")
+                                Log.e(TAG, "injectInput: failed to write TOUCH to ROLE_CONTROL socket (displayId=$displayId)")
                                 Result.failure(IOException("Failed to write touch event to ROLE_CONTROL socket"))
                             } else {
                                 Result.success(true)
@@ -199,88 +201,60 @@ class DaemonControlApiImpl(
                     }
                 }
                 else -> {
-                    Log.w("DaemonControlApi", "injectInput: unsupported event type ${event.javaClass.simpleName}")
+                    Log.w(TAG, "injectInput: unsupported event type ${event.javaClass.simpleName}")
                     Result.failure(IllegalArgumentException("Unsupported InputEvent type: ${event.javaClass.simpleName}"))
                 }
             }
         } catch (t: Throwable) {
-            Log.e("DaemonControlApi", "injectInput failed (displayId=$displayId)", t)
+            Log.e(TAG, "injectInput failed (displayId=$displayId)", t)
             Result.failure(t)
         }
     }
 
+    // ====================== 守护进程生命周期 ======================
 
-
-    override suspend fun exitDaemon(): Result<Unit> {
-        val msg = ControlMessage.ExitDaemon
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode == 0) {
-                Result.success(Unit)
-            } else {
-                Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-            }
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+    override suspend fun exitDaemon(): Result<Unit> =
+        sendAndTransform(ControlMessage.ExitDaemon) { resp ->
+            resp.asGenericResponse().requireSuccess()
+            Unit
         }
-    }
 
+    // ====================== 旋转控制 ======================
 
-
-    override suspend fun getRotation(displayId: Int): Result<Int> {
-        val msg = ControlMessage.GetRotation(displayId)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse && resp.statusCode == 0) {
-            val rotation = resp.message?.toIntOrNull()
-                ?: return Result.failure(IllegalStateException("Missing rotation value in response: ${resp.message}"))
-            Result.success(rotation)
-        } else {
-            Result.failure(IllegalStateException((resp as? DeviceMessage.GenericResponse)?.message ?: "Unexpected response: $resp"))
+    override suspend fun getRotation(displayId: Int): Result<Int> =
+        sendAndTransform(ControlMessage.GetRotation(displayId)) { resp ->
+            val gr = resp.asGenericResponse().requireSuccess()
+            gr.message?.toIntOrNull()
+                ?: throw IllegalStateException("Missing rotation value in response: ${gr.message}")
         }
-    }
 
-    override suspend fun freezeRotation(displayId: Int, rotation: Int): Result<Unit> {
-        val msg = ControlMessage.FreezeRotation(displayId, rotation)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode == 0) Result.success(Unit)
-            else Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+    override suspend fun freezeRotation(displayId: Int, rotation: Int): Result<Unit> =
+        sendAndTransform(ControlMessage.FreezeRotation(displayId, rotation)) { resp ->
+            resp.asGenericResponse().requireSuccess()
+            Unit
         }
-    }
 
-    override suspend fun thawRotation(displayId: Int): Result<Unit> {
-        val msg = ControlMessage.ThawRotation(displayId)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse) {
-            if (resp.statusCode == 0) Result.success(Unit)
-            else Result.failure(IllegalStateException(resp.message ?: "Failed code: ${resp.statusCode}"))
-        } else {
-            Result.failure(IllegalStateException("Unexpected response type: $resp"))
+    override suspend fun thawRotation(displayId: Int): Result<Unit> =
+        sendAndTransform(ControlMessage.ThawRotation(displayId)) { resp ->
+            resp.asGenericResponse().requireSuccess()
+            Unit
         }
-    }
 
-    override suspend fun isRotationFrozen(displayId: Int): Result<Boolean> {
-        val msg = ControlMessage.IsRotationFrozen(displayId)
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Connection error or timeout"))
-        return if (resp is DeviceMessage.GenericResponse && resp.statusCode == 0) {
-            val frozen = resp.message?.toIntOrNull()
-                ?: return Result.failure(IllegalStateException("Missing frozen value in response: ${resp.message}"))
-            Result.success(frozen != 0)
-        } else {
-            Result.failure(IllegalStateException((resp as? DeviceMessage.GenericResponse)?.message ?: "Unexpected response: $resp"))
+    override suspend fun isRotationFrozen(displayId: Int): Result<Boolean> =
+        sendAndTransform(ControlMessage.IsRotationFrozen(displayId)) { resp ->
+            val gr = resp.asGenericResponse().requireSuccess()
+            val frozen = gr.message?.toIntOrNull()
+                ?: throw IllegalStateException("Missing frozen value in response: ${gr.message}")
+            frozen != 0
         }
-    }
+
+    // ====================== 心跳 ======================
 
     override suspend fun ping(): Result<Long> {
         val start = System.currentTimeMillis()
-        val msg = ControlMessage.Ping
-        val resp = rpc.sendAndAwait(msg) ?: return Result.failure(IOException("Ping timeout"))
-        return if (resp is DeviceMessage.GenericResponse && resp.statusCode == 0) {
-            Result.success(System.currentTimeMillis() - start)
-        } else {
-            Result.failure(IllegalStateException("Ping failed"))
+        return sendAndTransform(ControlMessage.Ping) { resp ->
+            resp.asGenericResponse().requireSuccess()
+            System.currentTimeMillis() - start
         }
     }
 }

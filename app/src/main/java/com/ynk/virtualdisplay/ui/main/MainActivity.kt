@@ -96,7 +96,7 @@ private fun MainScreen(
 
     // 首次进入时尝试连接
     LaunchedEffect(Unit) {
-        viewModel.handleIntent(MainIntent.CheckShizuku)
+        viewModel.handleIntent(MainIntent.InitializeConnection)
     }
 
     Scaffold(

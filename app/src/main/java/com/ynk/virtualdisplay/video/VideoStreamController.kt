@@ -15,12 +15,11 @@ import java.io.IOException
 class VideoStreamController(
     private val transport: DaemonTransport,
     private val controlApi: com.ynk.virtualdisplay.rpc.DaemonControlApi,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val settingsDataSource: com.ynk.virtualdisplay.data.local.AppSettingsDataSource
 ) {
     companion object {
         private const val TAG = "VideoStreamController"
-        private const val DEFAULT_WIDTH = 1920
-        private const val DEFAULT_HEIGHT = 1080
         private const val PING_INTERVAL_MS = 2000L
     }
 
@@ -87,14 +86,14 @@ class VideoStreamController(
 
             val d = H264StreamDecoder(
                 videoStream = videoIn,
-                width = w.takeIf { it > 0 } ?: DEFAULT_WIDTH,
-                height = h.takeIf { it > 0 } ?: DEFAULT_HEIGHT,
+                width = w.takeIf { it > 0 } ?: VideoDefaults.DEFAULT_WIDTH,
+                height = h.takeIf { it > 0 } ?: VideoDefaults.DEFAULT_HEIGHT,
                 frameReader = frameReader,
                 tracker = perfTracker
             )
 
             d.onVideoConfig = onVideoConfig
-            d.ultraLowLatency = com.ynk.virtualdisplay.data.AppSettings.getUltraLowLatencySync()
+            d.ultraLowLatency = settingsDataSource.getUltraLowLatencySync()
             surface?.let { d.setDisplaySurface(it) }
             d.start()
             decoder = d

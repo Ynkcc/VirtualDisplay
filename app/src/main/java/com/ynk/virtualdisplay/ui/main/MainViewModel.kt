@@ -1,19 +1,19 @@
 package com.ynk.virtualdisplay.ui.main
 
-import android.content.Context
 import android.util.Log
-import android.view.Display
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ynk.virtualdisplay.data.AppSettings
-import com.ynk.virtualdisplay.data.model.ShizukuState
+import com.ynk.virtualdisplay.data.PrivilegeMode
+import com.ynk.virtualdisplay.data.ServerNode
+import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
-import com.ynk.virtualdisplay.data.repository.DisplayOwner
 import com.ynk.virtualdisplay.domain.DisplayInteractor
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import com.ynk.virtualdisplay.manager.ShizukuManager
+import com.ynk.virtualdisplay.protocol.DeviceMessage
 import com.ynk.virtualdisplay.util.NetUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -40,14 +40,12 @@ class MainViewModel(
     private val interactor: DisplayInteractor,
     private val shizukuManager: ShizukuManager,
     private val displayMetricsManager: DisplayMetricsManager,
-    private val context: Context
+    private val settingsDataSource: AppSettingsDataSource
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "MainViewModel"
     }
-
-    private val appContext = context.applicationContext
 
     // === MVI State ===
     private val _uiState = MutableStateFlow(MainUiState())
@@ -111,17 +109,17 @@ class MainViewModel(
 
         // 订阅 PrivilegeMode 和 ServerNode 变化
         viewModelScope.launch {
-            AppSettings.privilegeModeFlow(appContext).collect { mode ->
+            settingsDataSource.privilegeModeFlow().collect { mode ->
                 _uiState.update { it.copy(privilegeMode = mode) }
             }
         }
         viewModelScope.launch {
-            AppSettings.serverNodesFlow(appContext).collect { list ->
+            settingsDataSource.serverNodesFlow().collect { list ->
                 _uiState.update { it.copy(serverNodes = list) }
             }
         }
         viewModelScope.launch {
-            AppSettings.currentServerNodeCache.collect { node ->
+            settingsDataSource.currentServerNodeCache.collect { node ->
                 _uiState.update { it.copy(currentServerNode = node) }
                 interactor.setActiveNode(node) // Sync active node in repository
                 reloadDefaultInputsFromSettings(force = true)
@@ -132,7 +130,7 @@ class MainViewModel(
 
     fun handleIntent(intent: MainIntent) {
         when (intent) {
-            is MainIntent.CheckShizuku -> checkPrivilegeAndBind()
+            is MainIntent.InitializeConnection -> initializeAndBind()
             is MainIntent.RequestShizukuPermission -> shizukuManager.requestPermission()
             is MainIntent.RefreshDisplays -> refreshDisplays()
             is MainIntent.SwitchTab -> {
@@ -163,54 +161,30 @@ class MainViewModel(
 
     // === 特权与连接相关 ===
 
-    private fun checkPrivilegeAndBind() {
-        val mode = AppSettings.getPrivilegeModeSync()
-        val node = AppSettings.getCurrentServerNodeSync()
-        val isLocal = node.host == NetUtils.LOCAL_HOST || node.host == "localhost"
-
+    private fun initializeAndBind() {
         checkAndInitDeviceMetrics()
-
-        if (isLocal && mode != com.ynk.virtualdisplay.data.PrivilegeMode.NONE) {
-            if (mode == com.ynk.virtualdisplay.data.PrivilegeMode.SHIZUKU) {
-                shizukuManager.refreshState()
-                if (shizukuManager.isAvailable()) {
-                    interactor.bindService()
-                } else {
-                    _uiState.update { it.copy(statusMessage = "Shizuku 未就绪") }
-                }
-            } else if (mode == com.ynk.virtualdisplay.data.PrivilegeMode.ROOT) {
-                viewModelScope.launch(Dispatchers.IO) {
-                    val isRoot = interactor.isRootAvailable()
-                    _uiState.update { it.copy(rootAvailable = isRoot) }
-                    if (isRoot) {
-                        interactor.bindService()
-                    } else {
-                        _uiState.update { it.copy(statusMessage = "Root 未授权") }
-                    }
-                }
-            }
-        } else {
-            interactor.bindService()
-        }
+        // 特权预检仅发生在数据层真正拉起本机 daemon 时（DaemonProcessDataSource.startDaemon），
+        // 这里只负责初始化并建立连接，不做任何特权检查；失败经 connectionError/statusMessage 反馈。
+        interactor.bindService()
     }
 
-    private fun selectServerNode(node: com.ynk.virtualdisplay.data.ServerNode) {
+    private fun selectServerNode(node: ServerNode) {
         viewModelScope.launch {
-            AppSettings.setCurrentServerNode(appContext, node)
+            settingsDataSource.setCurrentServerNode(node)
             interactor.setActiveNode(node)
-            checkPrivilegeAndBind()
+            initializeAndBind()
         }
     }
 
-    private fun addServerNode(node: com.ynk.virtualdisplay.data.ServerNode) {
+    private fun addServerNode(node: ServerNode) {
         viewModelScope.launch {
-            AppSettings.addServerNode(appContext, node)
+            settingsDataSource.addServerNode(node)
         }
     }
 
-    private fun editServerNode(oldNode: com.ynk.virtualdisplay.data.ServerNode, newNode: com.ynk.virtualdisplay.data.ServerNode) {
+    private fun editServerNode(oldNode: ServerNode, newNode: ServerNode) {
         viewModelScope.launch {
-            AppSettings.updateServerNode(appContext, oldNode, newNode)
+            settingsDataSource.updateServerNode(oldNode, newNode)
             val current = _uiState.value.currentServerNode
             if (current.host == oldNode.host && current.port == oldNode.port) {
                 selectServerNode(newNode)
@@ -218,23 +192,23 @@ class MainViewModel(
         }
     }
 
-    private fun removeServerNode(node: com.ynk.virtualdisplay.data.ServerNode) {
+    private fun removeServerNode(node: ServerNode) {
         viewModelScope.launch {
-            AppSettings.removeServerNode(appContext, node)
+            settingsDataSource.removeServerNode(node)
             val current = _uiState.value.currentServerNode
             if (current.host == node.host && current.port == node.port) {
-                val localNode = com.ynk.virtualdisplay.data.ServerNode("本机", NetUtils.LOCAL_HOST, 27183, "")
+                val localNode = ServerNode("本机", NetUtils.LOCAL_HOST, 27183, "")
                 selectServerNode(localNode)
             }
         }
     }
 
-    private fun updatePrivilegeMode(mode: com.ynk.virtualdisplay.data.PrivilegeMode) {
+    private fun updatePrivilegeMode(mode: PrivilegeMode) {
         viewModelScope.launch {
-            AppSettings.setPrivilegeMode(appContext, mode)
+            settingsDataSource.setPrivilegeMode(mode)
             interactor.unbindService()
-            kotlinx.coroutines.delay(300)
-            checkPrivilegeAndBind()
+            delay(300)
+            initializeAndBind()
         }
     }
 
@@ -269,39 +243,20 @@ class MainViewModel(
                 return@launch
             }
 
-            val savedDisplays = AppSettings.getDisplaysForServer(appContext, currentNode)
-            val owners = interactor.displayOwners.value
+            val savedDisplays = settingsDataSource.getDisplaysForServer(currentNode)
             // 在协程内读取“当前”状态：进入函数时 managedDisplayIds 可能尚未随异步刷新完成更新，
             // 若在函数入口捕获快照，刚进入页面时孤儿显示器会被误判为“已连接”，须手动刷新才恢复。
-            // managedByService 来自服务端实时上报的 owned display ids —— 它才是“本 app 创建/接管”
-            // 的唯一权威来源。isOwned 也必须以它为准，而非磁盘上可能过期的 SavedDisplay.isOwned，
-            // 否则会出现“显示器明明由本 daemon 创建却显示为非本 app 创建”的误判。
-            val managedByService = interactor.managedDisplayIds.value
-
-            val displaysList = savedDisplays.map { display ->
-                val owner = owners[display.id]
-                DisplayInfoModel(
-                    id = display.id,
-                    name = display.name,
-                    width = display.width,
-                    height = display.height,
-                    dpi = display.dpi,
-                    mirrorDisplayId = display.mirrorDisplayId,
-                    isOwned = display.id in managedByService,
-                    ownerPackage = owner?.packageName,
-                    ownerUid = owner?.uid ?: 0
-                )
-            }
-
-            val orphans = if (isConnected) {
-                displaysList.filter { it.id !in managedByService }.map { it.id }
-            } else {
-                emptyList()
-            }
+            // 组装与孤儿判定下沉到 DisplayInteractor.buildDisplayModels。
+            val result = interactor.buildDisplayModels(
+                savedDisplays = savedDisplays,
+                owners = interactor.displayOwners.value,
+                managedByService = interactor.managedDisplayIds.value,
+                isConnected = isConnected
+            )
 
             _uiState.update { it.copy(
-                displays = displaysList,
-                orphanDisplayIds = orphans,
+                displays = result.displays,
+                orphanDisplayIds = result.orphanDisplayIds,
                 statusMessage = if (it.statusMessage.startsWith("Error:")) it.statusMessage else "Displays refreshed"
             ) }
         }
@@ -313,7 +268,7 @@ class MainViewModel(
         val deviceSpec = displayMetricsManager.getDefaultDisplaySpec()
             ?: DisplayMetricsManager.DisplaySpec(1080, 1920, 420)
         viewModelScope.launch {
-            val (defaultW, defaultH, defaultDpi) = AppSettings.getPrefDefaults(appContext)
+            val (defaultW, defaultH, defaultDpi) = settingsDataSource.getPrefDefaults()
             _uiState.update { state ->
                 state.copy(
                     inputWidth = if (force) {
@@ -357,7 +312,7 @@ class MainViewModel(
             _uiState.update { it.copy(isLoading = true, statusMessage = statusMsg) }
             interactor.createDisplay(
                 // 仅简化创建时传入的名称（去掉毫秒时间戳），展示逻辑保持不变。
-                name = if (mirrorDisplayId >= 0) "Mirror_VD_${mirrorDisplayId}" else "VD",
+                name = interactor.defaultDisplayName(mirrorDisplayId),
                 width = w,
                 height = h,
                 dpi = d,
@@ -408,7 +363,7 @@ class MainViewModel(
         return interactor.launchHome(displayId)
     }
 
-    suspend fun listApps(forceRefresh: Boolean = false): Result<List<com.ynk.virtualdisplay.protocol.DeviceMessage.AppEntry>> {
+    suspend fun listApps(forceRefresh: Boolean = false): Result<List<DeviceMessage.AppEntry>> {
         return interactor.listApps(forceRefresh)
     }
 
@@ -431,7 +386,7 @@ class MainViewModel(
                 Log.e(TAG, "Failed to restart service", e)
                 _uiState.update { it.copy(isLoading = false, statusMessage = "重启失败: ${e.message}") }
             } finally {
-                kotlinx.coroutines.delay(2000)
+                delay(2000)
                 _uiState.update { it.copy(isRestartCooldown = false) }
             }
         }

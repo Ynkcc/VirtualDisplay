@@ -4,7 +4,6 @@ import android.util.Log
 import com.ynk.virtualdisplay.BuildConfig
 import kotlinx.coroutines.CoroutineExceptionHandler
 import java.io.Closeable
-import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -82,8 +81,6 @@ object ExceptionUtils {
         closeable?.let {
             try {
                 it.close()
-            } catch (e: IOException) {
-                Log.w(tag, "Failed to close resource", e)
             } catch (e: Exception) {
                 Log.w(tag, "Failed to close resource", e)
             }
