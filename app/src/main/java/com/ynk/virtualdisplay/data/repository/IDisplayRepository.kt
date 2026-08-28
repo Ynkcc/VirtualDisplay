@@ -40,6 +40,9 @@ interface IDisplayRepository {
     /** 当前管理中的显示器 ID 列表 */
     val managedDisplayIds: StateFlow<Set<Int>>
 
+    /** 每个显示器（displayId -> owner）的持有者信息 */
+    val displayOwners: StateFlow<Map<Int, DisplayOwner>>
+
     /** 当前守护进程的 PID */
     val daemonPid: StateFlow<Int>
 
@@ -121,6 +124,12 @@ interface IDisplayRepository {
     /** 获取所有活跃的连接槽 */
     fun allSlots(): Collection<IDisplayRepository> = emptyList()
 }
+
+/** 虚拟显示器持有者信息 */
+data class DisplayOwner(
+    val packageName: String? = null,
+    val uid: Int = 0
+)
 
 /**
  * 辅助管理用户在虚拟屏幕中最近启动的 app 记录

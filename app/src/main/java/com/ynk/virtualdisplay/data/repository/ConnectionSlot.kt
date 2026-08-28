@@ -74,6 +74,9 @@ class ConnectionSlot(
     private val _managedDisplayIds = MutableStateFlow<Set<Int>>(emptySet())
     override val managedDisplayIds: StateFlow<Set<Int>> = _managedDisplayIds.asStateFlow()
 
+    private val _displayOwners = MutableStateFlow<Map<Int, DisplayOwner>>(emptyMap())
+    override val displayOwners: StateFlow<Map<Int, DisplayOwner>> = _displayOwners.asStateFlow()
+
     private val _daemonPid = MutableStateFlow(-1)
     override val daemonPid: StateFlow<Int> = _daemonPid.asStateFlow()
 
@@ -163,6 +166,8 @@ class ConnectionSlot(
                         Log.w(TAG, "[${node.uniqueKey()}] Max attempts reached, giving up")
                         _connectionError.value = "服务端已断开，请手动重连"
                         _connectionStatus.value = ConnectionStatus.DISCONNECTED
+                        // 放弃重连后释放绑定意图，允许后续手动重选节点再次触发连接
+                        isBound = false
                         return@launch
                     }
                     kotlinx.coroutines.delay(delayMs)
@@ -235,14 +240,20 @@ class ConnectionSlot(
                 false
             }
             if (connected) {
+                isBound = true
                 rpc.startMessageLoop(scope)
                 _connectionStatus.value = ConnectionStatus.CONNECTED
                 _connectionError.value = null
                 refreshManagedDisplays()
-            } else if (_connectionError.value == null) {
-                val err = "连接失败：无法建立到 ${host}:${port} 的连接。"
-                _connectionError.value = err
-                _connectionStatus.value = ConnectionStatus.ERROR
+            } else {
+                if (_connectionError.value == null) {
+                    _connectionError.value = "连接失败：无法建立到 ${host}:${port} 的连接。"
+                    _connectionStatus.value = ConnectionStatus.ERROR
+                }
+                // 连接层失败（daemon 已拉起但 TCP/握手未就绪）：进入后台自动重连自愈，
+                // 避免首屏连接失败后必须手动重选节点才能恢复。
+                isBound = true
+                scheduleAutoReconnect()
             }
             return Result.success(Unit)
         } catch (e: Exception) {
@@ -250,6 +261,8 @@ class ConnectionSlot(
             val err = com.ynk.virtualdisplay.util.NetUtils.getFriendlyErrorMessage(e)
             _connectionError.value = err
             _connectionStatus.value = ConnectionStatus.ERROR
+            // 权限/启动类异常无法通过重连自愈，撤销绑定意图（否则 bindService 将被短路）。
+            isBound = false
             return Result.failure(e)
         }
     }
@@ -261,6 +274,7 @@ class ConnectionSlot(
     }
 
     private suspend fun performCleanup(killDaemon: Boolean) {
+        isBound = false
         runCatching { reconnectJob?.cancel() }
         try { videoController.stop() } catch (e: Exception) { Log.w(TAG, "stop video failed", e) }
         if (killDaemon) {
@@ -276,6 +290,7 @@ class ConnectionSlot(
         _connectionError.value = null
         _connectionStatus.value = ConnectionStatus.DISCONNECTED
         _managedDisplayIds.value = emptySet()
+        _displayOwners.value = emptyMap()
         currentStreamingDisplayId = -1
     }
 
@@ -338,10 +353,14 @@ class ConnectionSlot(
                 }
                 AppSettings.setDisplaysForServer(context, node, updatedSaved)
                 _managedDisplayIds.value = displayInfos.filter { it.isOwned }.map { it.displayId }.toSet()
+                _displayOwners.value = displayInfos.associate {
+                    it.displayId to DisplayOwner(it.ownerPackage, it.ownerUid)
+                }
                 if (node.isLocal) _daemonPid.value = processDataSource?.getDaemonPid() ?: -1
             }.onFailure {
                 Log.w(TAG, "[${node.uniqueKey()}] refreshManagedDisplays failed", it)
                 _managedDisplayIds.value = emptySet()
+                _displayOwners.value = emptyMap()
             }
         }
     }

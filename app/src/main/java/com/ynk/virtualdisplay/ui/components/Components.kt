@@ -1,9 +1,15 @@
 package com.ynk.virtualdisplay.ui.components
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Delete
@@ -84,7 +90,7 @@ fun DisplayItem(
                 }
                 
                 Text(
-                    text = if (isOrphan) "未接管" else "已连接",
+                    text = if (isOrphan) "非本app创建" else "已连接",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = accentColor,
@@ -94,35 +100,7 @@ fun DisplayItem(
                 )
             }
  
-            // 2. 预览区域（静态占位，点击操控按钮进入全屏查看）
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(110.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF121212))
-                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(10.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Default.Tv,
-                        contentDescription = null,
-                        tint = if (isOrphan) Color.Gray.copy(alpha = 0.5f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
-                        modifier = Modifier.size(32.dp)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (isOrphan) "未接管" else "尚未实现预览",
-                        color = Color.Gray,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            // 3. 详细信息
+            // 2. 详细信息
             Text(
                 text = displayInfo.name,
                 fontSize = 12.sp,
@@ -138,7 +116,41 @@ fun DisplayItem(
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
             )
- 
+            // 本应用（daemon）创建的显示器不显示持有者信息
+            if (!displayInfo.isOwned) {
+                val ownerText = when {
+                    displayInfo.ownerPackage != null ->
+                        "持有者：${displayInfo.ownerPackage}" +
+                            (if (displayInfo.ownerUid > 0) " (uid ${displayInfo.ownerUid})" else "")
+                    isOrphan -> "持有者：未知"
+                    else -> "持有者：本应用"
+                }
+                // 单击复制：仅复制持有者包名，不带额外的描述信息
+                val context = LocalContext.current
+                val ownerCopyTarget = when {
+                    displayInfo.ownerPackage != null -> displayInfo.ownerPackage
+                    isOrphan -> null // 未知持有者，无包名可复制
+                    else -> context.packageName // 本应用持有者 → 当前应用包名
+                }
+                Text(
+                    text = ownerText,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable {
+                            if (ownerCopyTarget != null) {
+                                copyToClipboard(context, ownerCopyTarget)
+                                Toast.makeText(context, "已复制包名：$ownerCopyTarget", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "持有者未知，无包名可复制", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                )
+            }
+
             Spacer(modifier = Modifier.height(10.dp))
  
             // 5. 底部控制按钮
@@ -147,8 +159,10 @@ fun DisplayItem(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 删除按钮 (物理主屏幕 ID = 0 不允许删除)
-                if (displayInfo.id != 0) {
+                // 删除按钮：主屏幕(ID=0)和非本app创建的孤儿显示器不可删除
+                // （孤儿由其他应用持有，系统无按 displayId 删除的 API，daemon 无法接管删除）
+                // 只有 daemon 自己创建(isOwned)的显示器才能被 daemon 销毁
+                if (displayInfo.id != 0 && displayInfo.isOwned) {
                     IconButton(
                         onClick = onDelete,
                         modifier = Modifier
@@ -214,4 +228,12 @@ fun DisplayItem(
             }
         }
     }
+}
+
+/**
+ * 将指定文本复制到系统剪贴板。
+ */
+private fun copyToClipboard(context: Context, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("display_owner", text))
 }

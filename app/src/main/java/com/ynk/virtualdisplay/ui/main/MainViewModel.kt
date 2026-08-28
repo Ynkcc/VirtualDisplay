@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.model.ShizukuState
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
+import com.ynk.virtualdisplay.data.repository.DisplayOwner
 import com.ynk.virtualdisplay.domain.DisplayInteractor
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import com.ynk.virtualdisplay.manager.ShizukuManager
@@ -97,6 +98,13 @@ class MainViewModel(
         // 订阅管理中的显示器列表变化
         viewModelScope.launch {
             interactor.managedDisplayIds.collect {
+                refreshDisplaysInternal()
+            }
+        }
+
+        // 订阅持有者信息变化（随刷新异步到达，需在更新后重建列表）
+        viewModelScope.launch {
+            interactor.displayOwners.collect {
                 refreshDisplaysInternal()
             }
         }
@@ -250,22 +258,37 @@ class MainViewModel(
         val currentNode = _uiState.value.currentServerNode
 
         viewModelScope.launch {
+            // 连接断开时清空屏幕列表：不再展示无法确认状态的旧显示器。
+            // 重新连接成功后，会重新从本地配置读取对应服务器的列表并恢复。
+            val isConnected = interactor.connectionStatus.value == ConnectionStatus.CONNECTED
+            if (!isConnected) {
+                _uiState.update { it.copy(
+                    displays = emptyList(),
+                    orphanDisplayIds = emptyList()
+                ) }
+                return@launch
+            }
+
             val savedDisplays = AppSettings.getDisplaysForServer(appContext, currentNode)
+            val owners = interactor.displayOwners.value
             val displaysList = savedDisplays.map { display ->
+                val owner = owners[display.id]
                 DisplayInfoModel(
                     id = display.id,
                     name = display.name,
                     width = display.width,
                     height = display.height,
                     dpi = display.dpi,
-                    mirrorDisplayId = display.mirrorDisplayId
+                    mirrorDisplayId = display.mirrorDisplayId,
+                    isOwned = display.isOwned,
+                    ownerPackage = owner?.packageName,
+                    ownerUid = owner?.uid ?: 0
                 )
             }
 
             // 在协程内读取“当前”状态：进入函数时 managedDisplayIds 可能尚未随异步刷新完成更新，
             // 若在函数入口捕获快照，刚进入页面时孤儿显示器会被误判为“已连接”，须手动刷新才恢复。
             val managedByService = interactor.managedDisplayIds.value
-            val isConnected = interactor.connectionStatus.value == ConnectionStatus.CONNECTED
 
             val orphans = if (isConnected) {
                 displaysList.filter { it.id !in managedByService }.map { it.id }
@@ -330,7 +353,8 @@ class MainViewModel(
             val statusMsg = if (mirrorDisplayId >= 0) "Mirroring display $mirrorDisplayId..." else "Creating display ${w}x${h}..."
             _uiState.update { it.copy(isLoading = true, statusMessage = statusMsg) }
             interactor.createDisplay(
-                name = if (mirrorDisplayId >= 0) "Mirror_VD_${mirrorDisplayId}" else "Shizuku_VD_${System.currentTimeMillis()}",
+                // 仅简化创建时传入的名称（去掉毫秒时间戳），展示逻辑保持不变。
+                name = if (mirrorDisplayId >= 0) "Mirror_VD_${mirrorDisplayId}" else "VD",
                 width = w,
                 height = h,
                 dpi = d,

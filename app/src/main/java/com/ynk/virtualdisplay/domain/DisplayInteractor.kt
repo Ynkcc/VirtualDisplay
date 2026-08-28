@@ -10,6 +10,7 @@ import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.PrivilegeMode
 import com.ynk.virtualdisplay.data.model.ALL_DISPLAY_FLAGS
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
+import com.ynk.virtualdisplay.data.repository.DisplayOwner
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.data.repository.RecentAppHelper
 import com.ynk.virtualdisplay.manager.ShizukuManager
@@ -43,6 +44,7 @@ class DisplayInteractor(
     val connectionStatus: StateFlow<ConnectionStatus> = repository.connectionStatus
     val connectionError: StateFlow<String?> = repository.connectionError
     val managedDisplayIds: StateFlow<Set<Int>> = repository.managedDisplayIds
+    val displayOwners: StateFlow<Map<Int, DisplayOwner>> = repository.displayOwners
     val daemonPid: StateFlow<Int> = repository.daemonPid
 
     // === 服务生命周期 ===

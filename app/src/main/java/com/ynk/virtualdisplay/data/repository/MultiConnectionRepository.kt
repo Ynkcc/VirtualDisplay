@@ -94,6 +94,10 @@ class MultiConnectionRepository(
         .flatMapLatest { it?.managedDisplayIds ?: MutableStateFlow(emptySet()) }
         .stateIn(scope, SharingStarted.Eagerly, emptySet())
 
+    override val displayOwners: StateFlow<Map<Int, DisplayOwner>> = activeSlotFlow
+        .flatMapLatest { it?.displayOwners ?: MutableStateFlow(emptyMap()) }
+        .stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
     override val daemonPid: StateFlow<Int> = activeSlotFlow
         .flatMapLatest { it?.daemonPid ?: MutableStateFlow(-1) }
         .stateIn(scope, SharingStarted.Eagerly, -1)
