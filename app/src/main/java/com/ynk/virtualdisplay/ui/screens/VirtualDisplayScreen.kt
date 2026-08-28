@@ -35,6 +35,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ynk.virtualdisplay.data.AppSettings
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.ui.display.DisplayActivity
 import com.ynk.virtualdisplay.util.NetUtils
@@ -530,7 +531,11 @@ fun VirtualDisplayScreen(
                                 )
                                 context.startActivity(intent)
                             },
-                            onDelete = { viewModel.handleIntent(MainIntent.ReleaseDisplay(displayInfo.id)) },
+                            onDelete = {
+                                // 实时读取设置中的配置：是否在销毁前将应用移回主屏
+                                val moveToDefault = AppSettings.getMoveTasksOnDestroySync()
+                                viewModel.handleIntent(MainIntent.ReleaseDisplay(displayInfo.id, moveToDefault))
+                            },
                             onLaunchApp = { showAppSelectionDialogForDisplayId = displayInfo.id },
                             onMirror = {
                                 viewModel.handleIntent(

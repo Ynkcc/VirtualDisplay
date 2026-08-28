@@ -22,8 +22,8 @@ class DaemonRemoteDataSource(
         name: String, w: Int, h: Int, dpi: Int, flags: Int, mirrorDisplayId: Int = -1
     ): Result<Int> = controlApi.createDisplay(name, w, h, dpi, flags, mirrorDisplayId)
 
-    suspend fun releaseDisplay(displayId: Int): Result<Unit> =
-        controlApi.releaseDisplay(displayId)
+    suspend fun releaseDisplay(displayId: Int, moveTasksToDefaultDisplay: Boolean = true): Result<Unit> =
+        controlApi.releaseDisplay(displayId, moveTasksToDefaultDisplay)
 
     suspend fun resizeDisplay(displayId: Int, w: Int, h: Int, dpi: Int): Result<Unit> =
         controlApi.resizeDisplay(displayId, w, h, dpi)

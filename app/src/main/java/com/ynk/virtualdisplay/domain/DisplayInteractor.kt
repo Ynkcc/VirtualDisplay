@@ -191,9 +191,11 @@ class DisplayInteractor(
 
     /**
      * 释放指定显示器。
+     *
+     * @param moveTasksToDefaultDisplay true 销毁前将应用移回主屏（前台移回）；false 完全交给系统处理（应用可能被直接关闭）。
      */
-    suspend fun releaseDisplay(displayId: Int): Result<Unit> {
-        return repository.releaseDisplay(displayId)
+    suspend fun releaseDisplay(displayId: Int, moveTasksToDefaultDisplay: Boolean = true): Result<Unit> {
+        return repository.releaseDisplay(displayId, moveTasksToDefaultDisplay)
     }
 
     /**

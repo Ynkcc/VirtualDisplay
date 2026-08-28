@@ -142,7 +142,7 @@ class MainViewModel(
                 }
             }
             is MainIntent.CreateDisplay -> createVirtualDisplay(intent.width, intent.height, intent.dpi, intent.mirrorDisplayId)
-            is MainIntent.ReleaseDisplay -> releaseDisplay(intent.displayId)
+            is MainIntent.ReleaseDisplay -> releaseDisplay(intent.displayId, intent.moveTasksToDefaultDisplay)
             is MainIntent.LaunchApp -> launchSelectedApp(intent.packageName, intent.displayId)
             is MainIntent.RestartService -> forceRestartService()
             is MainIntent.UpdateInputs -> updateInputs(intent.width, intent.height, intent.dpi)
@@ -371,10 +371,10 @@ class MainViewModel(
 
     // === 释放显示器 ===
 
-    private fun releaseDisplay(displayId: Int) {
+    private fun releaseDisplay(displayId: Int, moveTasksToDefaultDisplay: Boolean) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, statusMessage = "Releasing display $displayId...") }
-            interactor.releaseDisplay(displayId)
+            interactor.releaseDisplay(displayId, moveTasksToDefaultDisplay)
                 .onSuccess {
                     _uiState.update { it.copy(isLoading = false, statusMessage = "Released $displayId") }
                     refreshDisplays()

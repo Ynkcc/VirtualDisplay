@@ -382,8 +382,8 @@ class ConnectionSlot(
         return result
     }
 
-    override suspend fun releaseDisplay(displayId: Int): Result<Unit> {
-        val result = remoteDataSource.releaseDisplay(displayId)
+    override suspend fun releaseDisplay(displayId: Int, moveTasksToDefaultDisplay: Boolean): Result<Unit> {
+        val result = remoteDataSource.releaseDisplay(displayId, moveTasksToDefaultDisplay)
         result.onSuccess {
             AppSettings.removeDisplayForServer(context, node, displayId)
             if (currentStreamingDisplayId == displayId) {

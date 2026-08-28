@@ -61,8 +61,8 @@ interface IDisplayRepository {
     /** 创建虚拟显示器 */
     suspend fun createDisplay(name: String, width: Int, height: Int, dpi: Int, flags: Int = 0, mirrorDisplayId: Int = -1): Result<Int>
 
-    /** 释放指定显示器 */
-    suspend fun releaseDisplay(displayId: Int): Result<Unit>
+    /** 释放指定显示器。moveTasksToDefaultDisplay=true 时销毁前将应用移回主屏，false 则完全交给系统处理 */
+    suspend fun releaseDisplay(displayId: Int, moveTasksToDefaultDisplay: Boolean = true): Result<Unit>
 
     /** 设置显示器 Surface — 驱动客户端 H264 解码器 */
     suspend fun setDisplaySurface(displayId: Int, surface: Surface?): Result<Unit>

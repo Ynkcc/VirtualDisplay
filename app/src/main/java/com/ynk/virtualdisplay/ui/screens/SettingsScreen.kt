@@ -48,6 +48,7 @@ fun SettingsScreen(
     val showPerformanceStats by AppSettings.showPerformanceStatsFlow(context).collectAsState(initial = true)
     val captureBack by AppSettings.captureBackFlow(context).collectAsState(initial = false)
     val ultraLowLatency by AppSettings.ultraLowLatencyFlow(context).collectAsState(initial = false)
+    val moveTasksOnDestroy by AppSettings.moveTasksOnDestroyFlow(context).collectAsState(initial = true)
 
     val flagStates = remember {
         mutableStateMapOf<String, Boolean>()
@@ -246,6 +247,19 @@ fun SettingsScreen(
                             onCheckedChange = { isChecked ->
                                 scope.launch {
                                     AppSettings.setUltraLowLatency(context, isChecked)
+                                }
+                            }
+                        )
+
+                        HorizontalDivider(color = Color.White.copy(alpha = 0.05f))
+
+                        SettingSwitchRow(
+                            title = "销毁显示器时移回主屏幕",
+                            description = "删除虚拟显示器时，将其上运行的应用移回主屏幕(需要应用本身支持)；关闭则完全交给系统处理（应用通常会被直接关闭）",
+                            checked = moveTasksOnDestroy,
+                            onCheckedChange = { isChecked ->
+                                scope.launch {
+                                    AppSettings.setMoveTasksOnDestroy(context, isChecked)
                                 }
                             }
                         )

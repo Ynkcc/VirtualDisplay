@@ -26,10 +26,14 @@ sealed class ControlMessage {
         }
     }
 
-    data class ReleaseVirtualDisplay(val displayId: Int) : ControlMessage() {
+    data class ReleaseVirtualDisplay(
+        val displayId: Int,
+        val moveTasksToDefaultDisplay: Boolean = true
+    ) : ControlMessage() {
         override val type: Int = TYPE_RELEASE_VIRTUAL_DISPLAY
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
             writeInt(displayId)
+            writeByte(if (moveTasksToDefaultDisplay) 1 else 0)
         }
     }
 

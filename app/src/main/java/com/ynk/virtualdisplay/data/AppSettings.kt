@@ -93,6 +93,7 @@ object AppSettings {
     val privilegeModeKey = stringPreferencesKey("privilege_mode")
     val autoStartServerKey = booleanPreferencesKey("auto_start_server")
     val ultraLowLatencyKey = booleanPreferencesKey("ultra_low_latency")
+    val moveTasksOnDestroyKey = booleanPreferencesKey("move_tasks_on_destroy")
 
     private val _captureBackCache = MutableStateFlow(false)
     val captureBackCache: StateFlow<Boolean> = _captureBackCache
@@ -112,6 +113,9 @@ object AppSettings {
     private val _ultraLowLatencyCache = MutableStateFlow(false)
     val ultraLowLatencyCache: StateFlow<Boolean> = _ultraLowLatencyCache
 
+    private val _moveTasksOnDestroyCache = MutableStateFlow(true)
+    val moveTasksOnDestroyCache: StateFlow<Boolean> = _moveTasksOnDestroyCache
+
     @Volatile
     private var initialized = false
 
@@ -126,6 +130,7 @@ object AppSettings {
                 _showPerformanceStatsCache.value = prefs[showPerformanceStatsKey] ?: true
                 _autoStartServerCache.value = prefs[autoStartServerKey] ?: true
                 _ultraLowLatencyCache.value = prefs[ultraLowLatencyKey] ?: false
+                _moveTasksOnDestroyCache.value = prefs[moveTasksOnDestroyKey] ?: true
 
                 val modeStr = prefs[privilegeModeKey] ?: PrivilegeMode.SHIZUKU.name
                 _privilegeModeCache.value = try {
@@ -511,6 +516,19 @@ object AppSettings {
 
     suspend fun setUltraLowLatency(context: Context, enabled: Boolean) {
         context.applicationContext.dataStore.edit { it[ultraLowLatencyKey] = enabled }
+    }
+
+    fun moveTasksOnDestroyFlow(context: Context): Flow<Boolean> {
+        return context.applicationContext.dataStore.data.map { prefs ->
+            prefs[moveTasksOnDestroyKey] ?: true
+        }
+    }
+
+    /** 实时读取「销毁虚拟显示器后是否将应用移回主屏」的配置（默认 true = 前台移回） */
+    fun getMoveTasksOnDestroySync(): Boolean = _moveTasksOnDestroyCache.value
+
+    suspend fun setMoveTasksOnDestroy(context: Context, enabled: Boolean) {
+        context.applicationContext.dataStore.edit { it[moveTasksOnDestroyKey] = enabled }
     }
 
     suspend fun getDisplaysForServer(context: Context, node: ServerNode): List<SavedDisplay> {

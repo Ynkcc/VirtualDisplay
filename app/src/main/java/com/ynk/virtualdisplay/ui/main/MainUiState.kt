@@ -66,8 +66,8 @@ sealed class MainIntent {
     data class SwitchTab(val tab: ScreenTab) : MainIntent()
     /** 创建虚拟显示器 */
     data class CreateDisplay(val width: String, val height: String, val dpi: String, val mirrorDisplayId: Int = -1) : MainIntent()
-    /** 释放显示器 */
-    data class ReleaseDisplay(val displayId: Int) : MainIntent()
+    /** 释放显示器。moveTasksToDefaultDisplay=true 销毁前将应用移回主屏，false 则完全交给系统处理 */
+    data class ReleaseDisplay(val displayId: Int, val moveTasksToDefaultDisplay: Boolean = true) : MainIntent()
     /** 在显示器上启动应用 */
     data class LaunchApp(val packageName: String, val displayId: Int) : MainIntent()
     /** 重启守护进程服务 */
