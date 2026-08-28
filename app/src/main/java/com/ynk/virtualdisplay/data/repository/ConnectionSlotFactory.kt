@@ -23,6 +23,12 @@ class ConnectionSlotFactory(
     private val settingsDataSource: AppSettingsDataSource,
     private val processDataSource: DaemonProcessDataSource,
 ) {
+    /**
+     * 为指定节点创建一套独立的连接资源（transport / rpc / remoteDataSource / videoController）。
+     * 本机节点才持有进程控制权（[ConnectionSlot.processDataSource] 非空）。
+     * @param node 目标服务器节点
+     * @return 组装完毕的 [ConnectionSlot]
+     */
     fun create(node: ServerNode): ConnectionSlot {
         // 每个槽独立的基础设施对象
         val transport = DaemonTransport()

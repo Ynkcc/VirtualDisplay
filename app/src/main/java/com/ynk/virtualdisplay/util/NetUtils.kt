@@ -2,10 +2,20 @@ package com.ynk.virtualdisplay.util
 
 import java.net.*
 
+/** 网络相关工具：地址常量、错误信息映射与 TCP 连通性测试。 */
 object NetUtils {
+    /** 本地环路地址。 */
     const val LOCAL_HOST = "127.0.0.1"
+
+    /** 任意地址（监听所有网卡）标识。 */
     const val ANY_HOST = "0.0.0.0"
 
+    /**
+     * 将网络异常映射为用户可读的中文提示，按常见错误类型给出排查建议。
+     *
+     * @param t 捕获的网络异常。
+     * @return 友好的中文错误描述。
+     */
     fun getFriendlyErrorMessage(t: Throwable): String {
         return when (t) {
             is ConnectException -> {

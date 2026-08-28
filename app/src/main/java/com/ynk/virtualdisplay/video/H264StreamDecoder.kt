@@ -87,7 +87,10 @@ class H264StreamDecoder(
     @Volatile private var dummySurface: Surface? = null
     @Volatile private var isUsingDummySurface: Boolean = false
 
+    /** codec 输出格式确定时回调，参数为解码器标签与可见宽高。 */
     var onVideoConfig: ((codecLabel: String, width: Int, height: Int) -> Unit)? = null
+
+    /** 超低延迟模式：输出帧不经 vsync 队列，直接以渲染时间戳 release 到 surface。 */
     var ultraLowLatency: Boolean = false
 
     // ---- 单解码线程 ----
@@ -127,6 +130,10 @@ class H264StreamDecoder(
     // 对外调用契约（对 VideoStreamController 不变）
     // ============================================================
 
+    /**
+     * 启动解码：创建并配置 codec，随后启动 reader 线程与解码主循环。
+     * 幂等——已在运行或已终止时调用会被忽略。codec 创建失败则保持 IDLE，交由上层感知失败。
+     */
     fun start() {
         synchronized(stateLock) {
             if (state != DecoderState.IDLE && state != DecoderState.CONFIGURED) {
@@ -152,6 +159,10 @@ class H264StreamDecoder(
         Log.i(TAG, "Decoder started (${width}x${height})")
     }
 
+    /**
+     * 停止解码并释放 codec。在 IDLE/STOPPED 状态下调用会被忽略。
+     * 阻塞式：reader 的 socket read 阻塞需由调用方先断开 socket 才能及时返回。
+     */
     fun stop() {
         val wasRunning: Boolean
         synchronized(stateLock) {
@@ -182,6 +193,11 @@ class H264StreamDecoder(
         }.onFailure { Log.e(TAG, "stop() failed on codec thread", it) }
     }
 
+    /**
+     * 设置/切换渲染 surface。运行中优先直接 setOutputSurface，失败则重建 codec。
+     *
+     * @param surface 目标 surface；为 null 或已失效时改用内部 dummy surface。
+     */
     fun setDisplaySurface(surface: Surface?) {
         if (!handler.post {
                 val isDummy = surface == null || !surface.isValid
@@ -205,6 +221,12 @@ class H264StreamDecoder(
         }
     }
 
+    /**
+     * 更新解码分辨率。若尺寸未变化则为 no-op；运行中更新会触发 codec 重建。
+     *
+     * @param newWidth  新宽度。
+     * @param newHeight 新高度。
+     */
     fun updateResolution(newWidth: Int, newHeight: Int) {
         if (width == newWidth && height == newHeight) return
         Log.i(TAG, "updateResolution: ${width}x${height} -> ${newWidth}x${newHeight} (state=$state)")
@@ -567,6 +589,7 @@ class H264StreamDecoder(
             Log.i(TAG, "createCodecInternal: ${width}x${height} surface=$activeSurface valid=${activeSurface.isValid} isDummy=$isDummy")
             val result = VideoDecoderTuning.createConfiguredDecoder(VIDEO_MIME, width, height, activeSurface)
             codec = result.codec
+            tracker.decodeMode = if (result.isHardware) "硬件" else "软件"
             Log.i(TAG, "Codec configured and started: ${width}x${height} via ${result.decoderName} [${result.appliedOptions.joinToString()}]")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create/start MediaCodec", e)

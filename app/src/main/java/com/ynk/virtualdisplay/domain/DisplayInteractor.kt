@@ -55,12 +55,7 @@ class DisplayInteractor(
         repository.bindService()
     }
 
-    /**
-     * 解绑服务。
-     *
-     * 事务编排层：当前无额外逻辑，仅透传 [IDisplayRepository.unbindService]。
-     * 保留此入口供 ViewModel 统一走 interactor，避免上层直接依赖数据层细节。
-     */
+    /** 解绑服务（透传 [IDisplayRepository.unbindService]）。 */
     fun unbindService() {
         repository.unbindService()
     }
@@ -78,12 +73,7 @@ class DisplayInteractor(
         repository.bindService()
     }
 
-    /**
-     * 切换活跃节点。
-     *
-     * 事务编排层：当前无额外逻辑，仅透传 [IDisplayRepository.setActiveNode]，
-     * 供 ViewModel 在节点切换时保持交互器与仓库同步。
-     */
+    /** 切换活跃节点（透传 [IDisplayRepository.setActiveNode]）。 */
     fun setActiveNode(node: com.ynk.virtualdisplay.data.ServerNode) {
         repository.setActiveNode(node)
     }
@@ -126,12 +116,7 @@ class DisplayInteractor(
      */
     suspend fun isRootAvailable(): Boolean = processDataSource.isRootAvailable()
 
-    /**
-     * 停止服务端进程并断开连接。
-     *
-     * 事务编排层：当前无额外逻辑，仅透传 [IDisplayRepository.stopDaemon]，
-     * 供 ViewModel 使用（与 [startDaemon] / [restartDaemon] 保持一致入口）。
-     */
+    /** 停止服务端进程并断开连接（透传 [IDisplayRepository.stopDaemon]）。 */
     suspend fun stopDaemon(): Result<Unit> {
         return repository.stopDaemon()
     }
@@ -163,42 +148,25 @@ class DisplayInteractor(
         return repository.createDisplay(name, width, height, dpi, finalFlags, mirrorDisplayId)
     }
 
-    /**
-     * 释放指定显示器。
+    /** 释放指定显示器（透传 [IDisplayRepository.releaseDisplay]）。
      *
-     * 事务编排层：当前无额外逻辑，仅透传 [IDisplayRepository.releaseDisplay]，
-     * 保留此入口供 ViewModel 统一走 interactor。显示器从持久化列表的移除由
-     * 数据层 [com.ynk.virtualdisplay.data.repository.ConnectionSlot.releaseDisplay] 完成。
-     *
-     * @param moveTasksToDefaultDisplay true 销毁前将应用移回主屏（前台移回）；false 完全交给系统处理（应用可能被直接关闭）。
+     * @param moveTasksToDefaultDisplay true 销毁前将应用移回主屏；false 完全交给系统处理（应用可能被直接关闭）。
      */
     suspend fun releaseDisplay(displayId: Int, moveTasksToDefaultDisplay: Boolean = true): Result<Unit> {
         return repository.releaseDisplay(displayId, moveTasksToDefaultDisplay)
     }
 
-    /**
-     * 在指定显示器上启动应用，并记录到最近使用列表。
-     *
-     * 事务编排层：当前无额外逻辑，仅透传 [IDisplayRepository.launchApp]。
-     * 应用最近使用列表的记录由数据层 [ConnectionSlot.launchApp] 完成。
-     */
+    /** 在指定显示器上启动应用，并记录到最近使用列表（透传 [IDisplayRepository.launchApp]）。 */
     suspend fun launchApp(packageName: String, displayId: Int): Result<Int> {
         return repository.launchApp(packageName, displayId)
     }
 
-    /**
-     * 在指定显示器上启动 Launcher（主屏幕）。
-     *
-     * 事务编排层：当前无额外逻辑，仅透传 [IDisplayRepository.launchHome]。
-     */
+    /** 在指定显示器上启动 Launcher（主屏幕，透传 [IDisplayRepository.launchHome]）。 */
     suspend fun launchHome(displayId: Int): Result<Int> {
         return repository.launchHome(displayId)
     }
 
-    /**
-     * 查询远程设备上已安装应用列表。
-     *
-     * 事务编排层：当前无额外逻辑，仅透传 [IDisplayRepository.listApps]。
+    /** 查询远程设备上已安装应用列表（透传 [IDisplayRepository.listApps]）。
      *
      * @param forceRefresh 为 true 时忽略缓存强制向 daemon 重新拉取（用于下拉刷新）
      */
@@ -208,14 +176,7 @@ class DisplayInteractor(
 
     // === 工具方法 ===
 
-    /**
-     * 刷新显示器列表缓存。
-     *
-     * 事务编排层：当前无额外逻辑，仅透传 [IDisplayRepository.refreshDisplays]。
-     * 输入注入（injectInput / injectInputWithDisplayId）、Surface 设置、尺寸调整、
-     * 回调注册（setVideoConfigCallback / setPerformanceStatsCallback）等与视频解码/输入
-     * 紧密耦合的操作，由上层直接调用 [IDisplayRepository]，interactor 不再重复透传。
-     */
+    /** 刷新显示器列表缓存（透传 [IDisplayRepository.refreshDisplays]）。 */
     fun refreshDisplays() {
         repository.refreshDisplays()
     }

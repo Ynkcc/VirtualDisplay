@@ -3,17 +3,29 @@ import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.nio.charset.StandardCharsets
 
+/**
+ * 守护进程控制消息（协商通道 RPC 的上层语义）。
+ *
+ * 每条消息编码为：1 字节 type + 8 字节 Big-Endian sequence + 各消息自定义载荷。
+ */
 sealed class ControlMessage {
+    /** 消息类型号，与 [companion] 中 TYPE_* 常量对应。 */
     abstract val type: Int
+    /** 编码为完整的线格式字节数组（含 type 头与 sequence）。 */
     abstract fun encode(sequence: Long): ByteArray
 
+    /**
+     * 创建虚拟显示器。
+     *
+     * 线格式：string name + int32 width + int32 height + int32 dpi + int32 flags + int32 displayId
+     */
     data class CreateVirtualDisplay(
         val name: String,
         val width: Int,
         val height: Int,
         val dpi: Int,
         val flags: Int,
-        // Fixed explicit field: always serialized (default -1 means "allocate new").
+        // 固定显式字段：始终序列化（默认 -1 表示"分配新显示器"）。
         val displayId: Int = -1
     ) : ControlMessage() {
         override val type: Int = TYPE_CREATE_VIRTUAL_DISPLAY
@@ -27,6 +39,9 @@ sealed class ControlMessage {
         }
     }
 
+    /**
+     * 释放虚拟显示器。线格式：int32 displayId + 1 字节 moveTasksToDefaultDisplay。
+     */
     data class ReleaseVirtualDisplay(
         val displayId: Int,
         val moveTasksToDefaultDisplay: Boolean = true
@@ -38,6 +53,7 @@ sealed class ControlMessage {
         }
     }
 
+    /** 调整虚拟显示器尺寸/DPI。线格式：int32 displayId + width + height + dpi。 */
     data class ResizeVirtualDisplay(
         val displayId: Int,
         val width: Int,
@@ -53,6 +69,7 @@ sealed class ControlMessage {
         }
     }
 
+    /** 在指定显示器上启动 Activity。线格式：string packageName + int32 displayId。 */
     data class StartActivity(val packageName: String, val displayId: Int) : ControlMessage() {
         override val type: Int = TYPE_START_ACTIVITY
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
@@ -61,16 +78,19 @@ sealed class ControlMessage {
         }
     }
 
+    /** 查询当前活跃显示器 ID 列表。无载荷。 */
     object GetActiveDisplayIds : ControlMessage() {
         override val type: Int = TYPE_GET_ACTIVE_DISPLAY_IDS
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {}
     }
 
+    /** 退出守护进程。无载荷。 */
     object ExitDaemon : ControlMessage() {
         override val type: Int = TYPE_EXIT_DAEMON
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {}
     }
 
+    /** 查询指定显示器的旋转状态。线格式：int32 displayId。 */
     data class GetRotation(val displayId: Int) : ControlMessage() {
         override val type: Int = TYPE_GET_ROTATION
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
@@ -78,6 +98,7 @@ sealed class ControlMessage {
         }
     }
 
+    /** 冻结指定显示器的旋转为固定角度。线格式：int32 displayId + int32 rotation。 */
     data class FreezeRotation(val displayId: Int, val rotation: Int) : ControlMessage() {
         override val type: Int = TYPE_FREEZE_ROTATION
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
@@ -86,6 +107,7 @@ sealed class ControlMessage {
         }
     }
 
+    /** 解冻指定显示器的旋转。线格式：int32 displayId。 */
     data class ThawRotation(val displayId: Int) : ControlMessage() {
         override val type: Int = TYPE_THAW_ROTATION
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
@@ -93,6 +115,7 @@ sealed class ControlMessage {
         }
     }
 
+    /** 查询指定显示器的旋转是否被冻结。线格式：int32 displayId。 */
     data class IsRotationFrozen(val displayId: Int) : ControlMessage() {
         override val type: Int = TYPE_IS_ROTATION_FROZEN
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
@@ -100,6 +123,7 @@ sealed class ControlMessage {
         }
     }
 
+    /** 查询活跃显示器的详细信息列表。无载荷。 */
     object GetActiveDisplayInfos : ControlMessage() {
         override val type: Int = TYPE_GET_ACTIVE_DISPLAY_INFOS
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {}
@@ -139,6 +163,7 @@ sealed class ControlMessage {
         }
     }
 
+    /** 在指定显示器上回到桌面。线格式：int32 displayId。 */
     data class LaunchHome(val displayId: Int) : ControlMessage() {
         override val type: Int = TYPE_LAUNCH_HOME
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {
@@ -146,11 +171,13 @@ sealed class ControlMessage {
         }
     }
 
+    /** 列出已安装应用。无载荷。 */
     object ListApps : ControlMessage() {
         override val type: Int = TYPE_LIST_APPS
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {}
     }
 
+    /** 心跳探测守护进程是否存活。无载荷。 */
     object Ping : ControlMessage() {
         override val type: Int = TYPE_PING
         override fun encode(sequence: Long): ByteArray = buildMessage(type, sequence) {}

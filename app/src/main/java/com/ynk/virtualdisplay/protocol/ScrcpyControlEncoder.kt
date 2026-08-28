@@ -24,9 +24,9 @@ object ScrcpyControlEncoder {
     private const val POINTER_ID_MOUSE = -1L
 
     /**
-     * Encode a [KeyEvent] as TYPE_INJECT_KEYCODE and write to [out].
+     * 将 [KeyEvent] 编码为 TYPE_INJECT_KEYCODE 并写入 [out]。
      *
-     * Wire format (all big-endian):
+     * 线格式（均为 Big-Endian）：
      *   1B  type     (0)
      *   1B  action   (KeyEvent.ACTION_DOWN / ACTION_UP)
      *   4B  keycode
@@ -42,16 +42,16 @@ object ScrcpyControlEncoder {
     }
 
     /**
-     * Encode a [MotionEvent] scroll as TYPE_INJECT_SCROLL_EVENT and write to [out].
+     * 将 [MotionEvent] 滚动手势编码为 TYPE_INJECT_SCROLL_EVENT 并写入 [out]。
      *
-     * Wire format:
+     * 线格式：
      *   1B  type     (3)
-     *   4B  x        (pixel x on the video surface)
-     *   4B  y        (pixel y on the video surface)
+     *   4B  x        (视频画面上的像素 x)
+     *   4B  y        (视频画面上的像素 y)
      *   2B  screenWidth  (unsigned short)
      *   2B  screenHeight (unsigned short)
-     *   2B  hScroll  (i16 fixed point)
-     *   2B  vScroll  (i16 fixed point)
+     *   2B  hScroll  (i16 定点数)
+     *   2B  vScroll  (i16 定点数)
      *   4B  buttons
      */
     fun encodeScroll(
@@ -77,22 +77,21 @@ object ScrcpyControlEncoder {
     }
 
     /**
-     * Encode all pointers in a [MotionEvent] as individual TYPE_INJECT_TOUCH_EVENT
-     * messages and write to [out].
+     * 将 [MotionEvent] 中的所有触点分别编码为独立的 TYPE_INJECT_TOUCH_EVENT
+     * 消息并写入 [out]。
      *
-     * Each pointer in the event is sent as a separate scrcpy message. The server's
-     * PointersState tracks per-pointer state and combines them into a MotionEvent
-     * for injection.
+     * 事件中的每个触点作为一条独立的 scrcpy 消息发送；服务端 PointersState 会
+     * 按触点追踪状态并合并为一条 MotionEvent 注入。
      *
-     * Wire format (per pointer):
+     * 线格式（每个触点）：
      *   1B  type         (2)
      *   1B  action       (ACTION_DOWN / ACTION_UP / ACTION_MOVE)
      *   8B  pointerId
-     *   4B  x            (pixel x on the video surface)
-     *   4B  y            (pixel y on the video surface)
+     *   4B  x            (视频画面上的像素 x)
+     *   4B  y            (视频画面上的像素 y)
      *   2B  screenWidth  (unsigned short)
      *   2B  screenHeight (unsigned short)
-     *   2B  pressure     (u16 fixed point, 0..1)
+     *   2B  pressure     (u16 定点数, 0..1)
      *   4B  actionButton
      *   4B  buttons
      */
@@ -106,7 +105,7 @@ object ScrcpyControlEncoder {
         val actionIndex = event.actionIndex
         val pointerCount = event.pointerCount
 
-        // Determine which pointer indices need ACTION_DOWN/UP vs ACTION_MOVE
+        // 判断哪些触点索引需要 ACTION_DOWN/UP，哪些需要 ACTION_MOVE
         val targetPointerId = if (actionIndex >= 0 && actionIndex < pointerCount) {
             event.getPointerId(actionIndex)
         } else {
@@ -149,12 +148,12 @@ object ScrcpyControlEncoder {
     }
 
     /**
-     * Determine the scrcpy action for a specific pointer within a multi-touch event.
+     * 确定多点触控事件中某个触点对应的 scrcpy action。
      *
-     * The server's PointersState tracks which pointer is being added/removed/updated.
-     * - Target pointer (the one that triggered the event): gets the actual DOWN/UP action
-     * - Other pointers: get ACTION_MOVE to update their positions
-     * - CANCEL: all pointers get ACTION_UP
+     * 服务端 PointersState 追踪是哪个触点被添加/移除/更新：
+     * - 目标触点（触发事件的触点）：获得实际的 DOWN/UP action
+     * - 其他触点：获得 ACTION_MOVE 以更新位置
+     * - CANCEL：所有触点获得 ACTION_UP
      */
     private fun resolvePointerAction(
         actionMasked: Int,
@@ -181,8 +180,8 @@ object ScrcpyControlEncoder {
     }
 
     /**
-     * Convert float [0,1] to unsigned 16-bit fixed point (65536 = 2^16).
-     * Server decodes with: unsignedShort == 0xffff ? 1f : (unsignedShort / 65536f)
+     * 将 float [0,1] 转换为无符号 16 位定点数（65536 = 2^16）。
+     * 服务端解码方式：unsignedShort == 0xffff ? 1f : (unsignedShort / 65536f)
      */
     private fun floatToU16FixedPoint(value: Float): Short {
         val clamped = value.coerceIn(0f, 1f)
@@ -194,8 +193,8 @@ object ScrcpyControlEncoder {
     }
 
     /**
-     * Convert float [-1,1] to signed 16-bit fixed point (32768 = 2^15).
-     * Server decodes with: value == 0x7fff ? 1f : (value / 32768f)
+     * 将 float [-1,1] 转换为有符号 16 位定点数（32768 = 2^15）。
+     * 服务端解码方式：value == 0x7fff ? 1f : (value / 32768f)
      */
     private fun floatToI16FixedPoint(value: Float): Short {
         val clamped = value.coerceIn(-1f, 1f)

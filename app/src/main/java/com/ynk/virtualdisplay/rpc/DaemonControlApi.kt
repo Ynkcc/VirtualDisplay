@@ -12,15 +12,46 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/**
+ * 守护进程高层控制 API。
+ *
+ * 每个方法都会发送一条 [ControlMessage] 并经 [DaemonRpc] 等待服务端响应，
+ * 返回封装了成功值或失败原因的 [Result]。
+ */
 interface DaemonControlApi {
+    /**
+     * 创建虚拟显示器。
+     *
+     * @return 成功时返回新显示器的 ID；失败返回错误
+     */
     suspend fun createDisplay(name: String, w: Int, h: Int, dpi: Int, flags: Int, mirrorDisplayId: Int = -1): Result<Int>
+
+    /**
+     * 释放虚拟显示器。
+     *
+     * @param displayId 目标显示器 ID
+     * @param moveTasksToDefaultDisplay 是否把其上任务移回默认显示器
+     */
     suspend fun releaseDisplay(displayId: Int, moveTasksToDefaultDisplay: Boolean = true): Result<Unit>
+
+    /** 调整虚拟显示器的分辨率/DPI。 */
     suspend fun resizeDisplay(displayId: Int, w: Int, h: Int, dpi: Int): Result<Unit>
+
+    /** 在指定显示器上启动 Activity。 */
     suspend fun startActivity(packageName: String, displayId: Int): Result<Int>
+
+    /** 在指定显示器上回到桌面。 */
     suspend fun launchHome(displayId: Int): Result<Int>
+
+    /** 查询已安装应用列表（可能较慢，内部使用更长超时）。 */
     suspend fun listApps(): Result<List<DeviceMessage.AppEntry>>
+
+    /** 查询当前活跃显示器 ID 列表。 */
     suspend fun getActiveDisplayIds(): Result<IntArray>
+
+    /** 查询当前活跃显示器的详细信息列表。 */
     suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>>
+
     /**
      * 注入输入事件 —— 通过 ROLE_CONTROL socket 上的 scrcpy 原生控制协议发送。
      *
@@ -39,14 +70,30 @@ interface DaemonControlApi {
      * @param screenHeight 视频表面高度 (像素，用于位置编码)
      */
     suspend fun injectInput(displayId: Int, event: InputEvent, screenWidth: Int, screenHeight: Int): Result<Boolean>
+
+    /** 请求守护进程退出。 */
     suspend fun exitDaemon(): Result<Unit>
+
+    /** 查询指定显示器的旋转状态。 */
     suspend fun getRotation(displayId: Int): Result<Int>
+
+    /** 冻结指定显示器的旋转为固定角度。 */
     suspend fun freezeRotation(displayId: Int, rotation: Int): Result<Unit>
+
+    /** 解冻指定显示器的旋转。 */
     suspend fun thawRotation(displayId: Int): Result<Unit>
+
+    /** 查询指定显示器的旋转是否被冻结。 */
     suspend fun isRotationFrozen(displayId: Int): Result<Boolean>
+
+    /** 心跳探测守护进程存活，返回往返耗时（毫秒）。 */
     suspend fun ping(): Result<Long>
 }
 
+/**
+ * [DaemonControlApi] 的默认实现：基于 [DaemonRpc]（协商通道 RPC）与
+ * [DaemonTransport]（scrcpy 原生控制通道）完成各操作。
+ */
 class DaemonControlApiImpl(
     private val rpc: DaemonRpc,
     private val transport: com.ynk.virtualdisplay.net.DaemonTransport

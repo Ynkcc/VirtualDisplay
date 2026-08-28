@@ -14,23 +14,12 @@ import org.koin.core.context.GlobalContext.loadKoinModules
 import org.koin.core.context.startKoin
 
 /**
- * VirtualDisplay 自定义应用入口。
+ * VirtualDisplay 应用入口，采用单阶段冷启动。
  *
- * 采用单阶段启动模式：
- *
- * 【Application.onCreate - 冷启动一次性完成全部初始化】
- *   1. 初始化全局异常处理器（ExceptionUtils）
- *   2. AppSettings.init()：初始化 DataStore
- *   3. startKoin(coreModule, appModule)：一次性加载全部模块，包括
- *      ShizukuManager / PermissionManager / DisplayMetricsManager，以及
- *      DaemonProcessController / Repository / DisplayInteractor / MainViewModel 等
- *
- * 不再存在延迟加载：所有模块在冷启动时即全部就绪，isCoreBootstrapped 在
- * onCreate 末尾被置为 true，标识核心已初始化完成。
- *
- * 这种设计确保：
- * - 应用启动后所有模块立即可用，无需等待 Shizuku 授权或其他条件
- * - bootstrapCore() 仅作为兼容性保留的空操作，不再承担第二阶段加载职责
+ * [onCreate] 中一次性完成全局异常处理器、DataStore 初始化，并
+ * 通过 startKoin 加载全部模块（coreModule + appModule），启动后所有
+ * 组件立即可用，无需等待 Shizuku 授权。所有模块就绪后置 [isCoreBootstrapped] 为 true；
+ * [bootstrapCore] 仅为兼容旧调用点而保留的空操作。
  */
 class MyApplication : Application() {
     companion object {

@@ -22,20 +22,20 @@ import android.view.WindowManager
  */
 class DisplayMetricsManager(private val context: Context) {
 
+    /** 显示器规格：宽、高（像素）与 DPI。 */
     data class DisplaySpec(val width: Int, val height: Int, val dpi: Int)
 
     private val displayManager: DisplayManager
         get() = context.applicationContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
 
-    /**
-     * 获取默认显示器的规格。
-     */
+    /** 获取默认显示器的规格，不存在时返回 null。 */
     fun getDefaultDisplaySpec(): DisplaySpec? {
         return getDisplaySpec(Display.DEFAULT_DISPLAY)
     }
 
     /**
      * 获取指定 displayId 的显示器规格。
+     * @return 对应显示器的规格；displayId 无效时返回 null
      */
     fun getDisplaySpec(displayId: Int): DisplaySpec? {
         val display = displayManager.getDisplay(displayId) ?: return null

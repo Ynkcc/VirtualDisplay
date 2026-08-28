@@ -16,27 +16,29 @@ import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 
+/**
+ * 与守护进程之间的 TCP 传输层，负责建立/维护协商、控制、视频三类 socket，
+ * 并封装握手与 scrcpy 原生通道的建立。
+ */
 class DaemonTransport {
     companion object {
         private const val TAG = "DaemonTransport"
-        // Connect timeout (ms) for Socket.connect(). Increased for cross-device stability.
+        // Socket.connect() 的连接超时（毫秒）。加大以保证跨设备稳定性。
         private const val CONNECT_TIMEOUT_MS = 3000
-        // Socket read timeout (ms) for socket input streams.
+        // socket 输入流的读超时（毫秒）。
         private const val SOCKET_READ_TIMEOUT_MS = 30_000
-        // Timeout (ms) for reading the displayId ack on freshly-opened role
-        // sockets (ROLE_CONTROL / ROLE_VIDEO). Guards against the server accept
-        // loop being busy/stuck and never replying — without it a half-open
-        // socket would block this coroutine forever and "操控" would hang.
+        // 新建角色 socket（ROLE_CONTROL / ROLE_VIDEO）后读取 displayId ack 的超时（毫秒）。
+        // 防止服务端 accept 循环繁忙/卡住而不回应——若无此超时，半开 socket 会
+        // 永久阻塞该协程，导致"操控"卡死。
         private const val HANDSHAKE_ACK_TIMEOUT_MS = 10_000
-        // Initial delay for retries.
+        // 重试的初始退避延迟。
         private const val RETRY_BASE_DELAY_MS = 100L
     }
 
-    // Accessed across coroutines on Dispatchers.IO: connect()/disconnect()
-    // write them while DaemonRpc's message loop and VideoStreamController read
-    // them. @Volatile guarantees readers see the latest reference instead of a
-    // stale cached null. Callers already tolerate a null return (and IOExceptions
-    // from a concurrently-closed socket).
+    // 各 socket/流在 Dispatchers.IO 上的多个协程间共享：connect()/disconnect()
+    // 写入，而 DaemonRpc 的消息循环与 VideoStreamController 读取。@Volatile 保证
+    // 读取方能看到最新引用而非过期的缓存 null；调用方已容忍 null 返回（以及
+    // 并发关闭 socket 产生的 IOException）。
     @Volatile private var negotiationSocket: Socket? = null
     @Volatile private var controlSocket: Socket? = null
     @Volatile private var videoSocket: Socket? = null
@@ -45,8 +47,7 @@ class DaemonTransport {
     @Volatile internal var controlIn: DataInputStream? = null
     @Volatile internal var controlOut: DataOutputStream? = null
 
-    // Stored during connect() so connectScrcpyChannels() can open fresh role
-    // sockets without re-handshaking the negotiation channel.
+    // connect() 时保存，供 connectScrcpyChannels() 打开新角色 socket 而无需重新握手协商通道。
     @Volatile private var host: String = ""
     @Volatile private var port: Int = 0
     // daemon_secret_token 认证。null 表示不发送认证。
@@ -56,20 +57,25 @@ class DaemonTransport {
     var session: DaemonSession? = null
         private set
 
+    /** 协商通道的输入流，未连接时为 null。 */
     fun negotiationInputStream(): DataInputStream? = negotiationIn
+    /** 协商通道的输出流，未连接时为 null。 */
     fun negotiationOutputStream(): DataOutputStream? = negotiationOut
+    /** 控制通道的输入流，未连接时为 null。 */
     fun controlInputStream(): DataInputStream? = controlIn
+    /** 控制通道的输出流，未连接时为 null。 */
     fun controlOutputStream(): DataOutputStream? = controlOut
+    /** 视频通道的输入流，未连接时为 null。 */
     fun videoInputStream(): InputStream? = videoSocket?.inputStream
 
-    // Synchronizes writes to controlOut so the RPC message loop (which reads controlIn
-    // on its own thread) and the input injection path (which writes controlOut from
-    // InputController's coroutine) don't interleave bytes on the same stream.
+    // 同步对 controlOut 的写入，避免 RPC 消息循环（自身线程读 controlIn）与
+    // 输入注入路径（InputController 协程写 controlOut）在同一流上交错字节。
     private val controlWriteLock = Any()
 
     /**
-     * Thread-safe write to the ROLE_CONTROL socket output stream.
-     * Returns false if the control socket is not connected (video not streaming).
+     * 线程安全地向 ROLE_CONTROL socket 输出流写入数据。
+     *
+     * @return false 表示控制 socket 未连接（视频未在流式传输）
      */
     fun writeControlMessage(block: (DataOutputStream) -> Unit): Boolean {
         val out = controlOut ?: return false
@@ -85,9 +91,13 @@ class DaemonTransport {
     }
 
     /**
-     * Connect the scrcpy-native ROLE_CONTROL and ROLE_VIDEO sockets.
+     * 建立 scrcpy 原生 ROLE_CONTROL 与 ROLE_VIDEO 两个 socket。
      *
-     * @param displayId the displayId the video socket should route to (b7aef962)
+     * 先断开旧通道，再依次打开控制、视频 socket，各自写入角色/会话/显示器
+     * 并读取 displayId ack 以确认服务端路由正确。
+     *
+     * @param displayId 视频与控制 socket 应路由到的显示器 ID (b7aef962)
+     * @return true 表示两个通道均建立成功
      */
     suspend fun connectScrcpyChannels(displayId: Int): Boolean = withContext(Dispatchers.IO) {
         val currentSession = session ?: return@withContext false
@@ -102,11 +112,9 @@ class DaemonTransport {
             DaemonHandshake.writeRole(ctrlOut, DaemonSocketRole.ROLE_CONTROL)
             DaemonHandshake.writeSessionId(ctrlOut, currentSession.sessionId)
             DaemonHandshake.writeDisplayId(ctrlOut, displayId)
-            // Guard the ack read with a bounded timeout: if the server's role
-            // dispatch is busy/stuck it won't reply, and without this a
-            // half-open socket would block "操控" forever. Restore 0 (no
-            // timeout) afterwards so the long-lived control read loop is not
-            // affected by the idle keep-alive on the server side.
+            // 用有界超时守护 ack 读取：若服务端角色分发繁忙/卡住而不回应，
+            // 无此超时半开 socket 会永久阻塞"操控"。之后恢复 0（无超时），
+            // 以免影响长生命周期控制读循环的服务端空闲保活。
             ctrl.soTimeout = HANDSHAKE_ACK_TIMEOUT_MS
             val ctrlAck = try {
                 DaemonHandshake.readInt32(ctrl.inputStream)
@@ -129,8 +137,8 @@ class DaemonTransport {
             DaemonHandshake.writeRole(videoOut, DaemonSocketRole.ROLE_VIDEO)
             DaemonHandshake.writeSessionId(videoOut, currentSession.sessionId)
             DaemonHandshake.writeDisplayId(videoOut, displayId)
-            // Same bounded ack guard as the control socket; video stays on
-            // timeout 0 after the ack since the decoder blocks on it.
+            // 与控制 socket 相同的有限 ack 守护；视频通道在 ack 后保持 0 超时，
+            // 因为解码器会阻塞等待它。
             video.soTimeout = HANDSHAKE_ACK_TIMEOUT_MS
             val videoAck = try {
                 DaemonHandshake.readInt32(video.inputStream)
@@ -150,6 +158,7 @@ class DaemonTransport {
         }
     }
 
+    /** 关闭并清空 scrcpy 原生控制/视频通道。 */
     fun disconnectScrcpyChannels() {
         runCatching { controlIn?.close() }
         runCatching { controlOut?.close() }
@@ -163,15 +172,18 @@ class DaemonTransport {
     }
 
     /**
-     * Open the negotiation socket, perform the two-phase handshake, and send
-     * TYPE_CONFIGURE_SESSION (216) so the server transitions to CONFIGURED
-     * phase. Without step (4) the server will reject every ROLE_* socket
-     * (waits 2s then closes).
+     * 打开协商 socket，完成两阶段握手，并发送 TYPE_CONFIGURE_SESSION (216) 使
+     * 服务端进入 CONFIGURED 阶段。若不发送该消息，服务端会拒绝所有后续
+     * ROLE_* socket（等待 2s 后关闭）。支持在 [timeoutMs] 内带退避地重试。
      *
-     * @param secretToken optional daemon_secret_token (null = no auth)
-     * @param optionsKv optional newline-separated scrcpy key=value overrides
-     * @param rolesMask role mask (0 = allow any role type)
-     * @param rolesEntries explicit (role, displayId) declarations (empty allows any)
+     * @param host 守护进程主机地址
+     * @param port 守护进程端口
+     * @param timeoutMs 总重试时长上限（毫秒）
+     * @param secretToken 可选的 daemon_secret_token（null = 不认证）
+     * @param optionsKv 可选的换行分隔 scrcpy key=value 覆盖项
+     * @param rolesMask 角色掩码（0 = 允许任意角色类型）
+     * @param rolesEntries 显式的 (role, displayId) 声明（空 = 允许任意）
+     * @return true 表示连接并完成握手
      */
     suspend fun connect(
         host: String,
@@ -203,22 +215,21 @@ class DaemonTransport {
                 val out = negotiation.getOutputStream()
                 val input = negotiation.getInputStream()
 
-                // Step 1: write ROLE_NEGOTIATION
+                // Step 1: 写入 ROLE_NEGOTIATION
                 DaemonHandshake.writeRole(out, DaemonSocketRole.ROLE_NEGOTIATION)
 
-                // Step 2: read 4B sessionId (Big-Endian)
+                // Step 2: 读取 4 字节 Big-Endian 的 sessionId
                 val sessionId = DaemonHandshake.readSessionId(input)
 
-                // Step 3: (optional) send daemon_secret_token: 4B BE length + UTF-8 bytes.
-                // NOTE: a wrong / missing token will get 127.0.0.1 blacklisted for
-                // the daemon's runtime — this path trusts the caller passed the
-                // same token used to start the daemon (it is read from settings
-                // in the repository bindService / autoReconnect flow).
+                // Step 3:（可选）发送 daemon_secret_token：4 字节 BE 长度 + UTF-8 字节。
+                // 注意：错误/缺失的 token 会使 127.0.0.1 在守护进程运行期间被拉黑——
+                // 此处信任调用方传入的是启动守护进程所用的同一 token（由仓储层在
+                // bindService / autoReconnect 流程中从设置读取）。
                 if (secretToken != null && secretToken.isNotEmpty()) {
                     DaemonHandshake.writeToken(out, secretToken)
                 }
 
-                // Step 4: read 64-byte device meta
+                // Step 4: 读取 64 字节定长设备元数据
                 val deviceName = DaemonHandshake.readDeviceMeta(input)
 
                 session = DaemonSession(sessionId, deviceName)
@@ -226,9 +237,8 @@ class DaemonTransport {
                 negotiationOut = DataOutputStream(out)
                 Log.i(TAG, "Negotiation socket handshake successful: sessionId=$sessionId, deviceName=$deviceName, auth=${secretToken?.isNotEmpty() == true}")
 
-                // Step 5: send TYPE_CONFIGURE_SESSION (216) so the server moves to
-                // the CONFIGURED phase — otherwise any subsequent ROLE_* socket
-                // will wait 2s and then be rejected.
+                // Step 5: 发送 TYPE_CONFIGURE_SESSION (216)，使服务端进入 CONFIGURED 阶段——
+                // 否则后续任何 ROLE_* socket 都会等待 2s 后被拒绝。
                 val cfgSeq = SequenceGenerator().next()
                 val cfgBytes = ControlMessage.ConfigureSession(
                     optionsKv = optionsKv,
@@ -238,18 +248,15 @@ class DaemonTransport {
                 try {
                     negotiationOut!!.write(cfgBytes)
                     negotiationOut!!.flush()
-                    // Wait for matching GenericResponse. DaemonRpc owns the
-                    // long-running message loop which also reads from
-                    // negotiationIn, so we must synchronously drain the response
-                    // here BEFORE starting the loop (otherwise it'd race
-                    // read-ahead and the deferred resolution would be missed).
-                    // This mirrors the Python client's handshake: CONFIGURE_SESSION
-                    // is part of connect(), not the runtime message flow.
+                    // 等待匹配的 GenericResponse。DaemonRpc 拥有长生命周期消息循环，
+                    // 它也读取 negotiationIn，因此必须在启动循环之前同步地在此排空
+                    // 该响应（否则会与预读竞态，导致 deferred 解析被错过）。
+                    // 这与 Python 客户端握手一致：CONFIGURE_SESSION 属于 connect()，
+                    // 而非运行时消息流。
                     //
-                    // withTimeout protects against a server crash between sending
-                    // CONFIGURE_SESSION and receiving the echo reply — without it
-                    // DeviceMessageCodec.read() would block forever on the half-open
-                    // socket because SO_TIMEOUT is long enough (30s) to mask the hang.
+                    // withTimeout 保护"发送 CONFIGURE_SESSION 后、收到回声前服务端崩溃"
+                    // 的场景——否则 DeviceMessageCodec.read() 会因 SO_TIMEOUT 足够长
+                    // （30s）掩盖挂起而永久阻塞在半开 socket 上。
                     val msg = try {
                         withTimeout(5_000) {
                             DeviceMessageCodec.read(negotiationIn!!)
@@ -289,6 +296,9 @@ class DaemonTransport {
         false
     }
 
+    /**
+     * 断开与守护进程的全部连接（协商/控制/视频通道），并清空会话信息。
+     */
     suspend fun disconnect() = withContext(Dispatchers.IO) {
         disconnectInternal()
         Log.i(TAG, "Disconnected")

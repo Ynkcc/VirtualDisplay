@@ -46,6 +46,10 @@ class MultiConnectionRepository(
 
     // ====================== 多连接管理 API ======================
 
+    /**
+     * 建立到指定节点的连接：若尚无对应槽则创建并绑定，并设为活跃节点（若当前无活跃节点）。
+     * @param node 目标服务器节点
+     */
     override fun connectNode(node: ServerNode) {
         val key = node.uniqueKey()
         val existing = _slots.value[key]
@@ -58,6 +62,11 @@ class MultiConnectionRepository(
         Log.i(TAG, "connectNode: ${node.name} (${node.host}:${node.port}), activeNode=${_activeNodeKey.value}")
     }
 
+    /**
+     * 断开指定节点的连接并移除其槽。
+     * @param node 目标服务器节点
+     * @param killDaemon true 时同时销毁服务（停止 daemon），false 仅解绑
+     */
     override fun disconnectNode(node: ServerNode, killDaemon: Boolean) {
         val key = node.uniqueKey()
         val slot = _slots.value[key] ?: return
@@ -73,6 +82,7 @@ class MultiConnectionRepository(
         Log.i(TAG, "disconnectNode: ${node.name}, new activeNode=${_activeNodeKey.value}")
     }
 
+    /** 将指定节点设为活跃节点；若槽尚不存在则先建立连接。 */
     override fun setActiveNode(node: ServerNode) {
         val key = node.uniqueKey()
         if (!_slots.value.containsKey(key)) {

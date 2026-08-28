@@ -35,11 +35,16 @@ class DaemonProcessController(
 
     private val daemonPrefs = DaemonPrefs(context)
 
+    /**
+     * 获取当前正在运行的守护进程 PID（用于 UI 状态展示）。
+     *
+     * @return PID，-1 表示未找到
+     */
     fun getDaemonPid(): Int {
         if (cachedPid > 0) return cachedPid
         val savedPort = daemonPrefs.getSavedPortSync()
         val port = if (savedPort > 0) savedPort else 27183
-        val pid = findDaemonPid(port) // Get any daemon on this port for UI status
+        val pid = findDaemonPid(port) // 在端口上查找任意守护进程，用于 UI 状态
         if (pid > 0) cachedPid = pid
         return pid
     }
@@ -92,6 +97,17 @@ class DaemonProcessController(
         daemonPrefs.clearSavedPid()
     }
 
+    /**
+     * 按当前特权模式拉起守护进程，并等待其端口就绪。
+     *
+     * 若同端口同地址的守护进程已在运行则直接复用；若端口可连通但 PID 无法解析，
+     * 也视为已运行并复用，避免重复拉起后误杀正确进程。
+     *
+     * @param port 守护进程监听端口
+     * @param address 守护进程绑定地址
+     * @param password 可选的 daemon_secret_token 认证口令
+     * @return true 表示端口已就绪
+     */
     fun startDaemon(port: Int, address: String = NetUtils.LOCAL_HOST, password: String? = null): Boolean {
         val mode = settingsDataSource.getPrivilegeModeSync()
         if (mode == PrivilegeMode.NONE) {
@@ -209,6 +225,10 @@ class DaemonProcessController(
         return false
     }
 
+    /**
+     * 停止守护进程：优先按 PID 发送 SIGTERM，若仍存活则升级为 SIGKILL；
+     * 最后清理保存的 PID 与进程句柄。
+     */
     fun stopDaemon() {
         val mode = settingsDataSource.getPrivilegeModeSync()
         if (mode == PrivilegeMode.NONE) {

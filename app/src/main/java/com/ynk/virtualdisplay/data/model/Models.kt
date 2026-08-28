@@ -1,5 +1,12 @@
 package com.ynk.virtualdisplay.data.model
 
+/**
+ * Shizuku 服务连接状态。
+ * - [Checking]：正在检查服务可用性；
+ * - [NotRunning]：服务未运行；
+ * - [PermissionDenied]：服务运行但未授予权限；
+ * - [Ready]：已就绪，可发起特权调用。
+ */
 sealed class ShizukuState {
     data object Checking : ShizukuState()
     data object NotRunning : ShizukuState()
@@ -7,8 +14,18 @@ sealed class ShizukuState {
     data object Ready : ShizukuState()
 }
 
+/** 已安装应用信息（显示名 + 包名）。 */
 data class AppInfo(val name: String, val packageName: String)
 
+/**
+ * 一个可配置的虚拟显示器标志开关的定义。
+ * @property key 唯一标识，同时用作设置持久化 key 与 per-node key 后缀
+ * @property bitValue 对应的位掩码值（见 VIRTUAL_DISPLAY_FLAG_*）
+ * @property name 展示名
+ * @property description 用途说明
+ * @property minSdk 该标志可用的最低 SDK 版本
+ * @property isDefaultEnabled 默认是否启用
+ */
 data class DisplayFlag(
     val key: String,
     val bitValue: Int,
@@ -56,6 +73,16 @@ val ALL_DISPLAY_FLAGS = listOf(
     DisplayFlag("flag_device_display_group", VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP, "Device Display Group", "指示此虚拟屏幕应被关联到特定的伴随设备组，用于区分普通的系统组和特定的硬件投屏组", 34, false)
 )
 
+/**
+ * 一个已保存的虚拟显示器配置，用于跨会话恢复。
+ * @property id 显示器 ID
+ * @property name 显示器名称
+ * @property width 宽度
+ * @property height 高度
+ * @property dpi 像素密度
+ * @property mirrorDisplayId 镜像的源显示器 ID，-1 表示非镜像显示器
+ * @property isOwned 是否由本应用创建并持有
+ */
 data class SavedDisplay(
     val id: Int,
     val name: String,
@@ -65,6 +92,7 @@ data class SavedDisplay(
     val mirrorDisplayId: Int = -1,
     val isOwned: Boolean = false
 ) {
+    /** 序列化为 JSON 对象，用于持久化存储。 */
     fun toJsonObject(): org.json.JSONObject {
         return org.json.JSONObject().apply {
             put("id", id)
@@ -78,6 +106,7 @@ data class SavedDisplay(
     }
 
     companion object {
+        /** 从 [toJsonObject] 的产物反序列化显示器配置。 */
         fun fromJsonObject(json: org.json.JSONObject): SavedDisplay {
             return SavedDisplay(
                 id = json.getInt("id"),

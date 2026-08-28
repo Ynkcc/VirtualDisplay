@@ -12,6 +12,11 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.IOException
 
+/**
+ * 视频流控制器：编排解码链路（Scrcpy 帧读取 → H264 解码 → surface 渲染）的启动与停止。
+ * 通过 [DaemonTransport] 建立/关闭视频与控制的 Scrcpy 子通道，以 [Mutex] 串行化
+ * start/stop 操作，并周期性 ping 更新网络延迟统计。所有状态变更需在调用方协程上下文中执行。
+ */
 class VideoStreamController(
     private val transport: DaemonTransport,
     private val controlApi: com.ynk.virtualdisplay.rpc.DaemonControlApi,
@@ -28,9 +33,22 @@ class VideoStreamController(
     private var tracker: PerformanceTracker? = null
     private var pingJob: kotlinx.coroutines.Job? = null
 
+    /** codec 输出格式确定时回调，参数为解码器标签与可见宽高。 */
     var onVideoConfig: ((codecLabel: String, width: Int, height: Int) -> Unit)? = null
+
+    /** 周期性上报格式化性能统计字符串的回调。 */
     var onPerformanceStats: ((String) -> Unit)? = null
 
+    /**
+     * 启动指定 display 的视频流：关闭残留 Scrcpy 子通道，连接视频/控制 socket，
+     * 创建解码器与性能跟踪器并开始渲染。幂等操作，需在协程上下文中调用。
+     *
+     * @param displayId 目标 display 的 id，用于服务端路由。
+     * @param surface   渲染目标 surface；为 null 时内部改用 dummy surface。
+     * @param w         期望视频宽度，<=0 时回退到 [VideoDefaults.DEFAULT_WIDTH]。
+     * @param h         期望视频高度，<=0 时回退到 [VideoDefaults.DEFAULT_HEIGHT]。
+     * @return 成功返回 [Result.success]；通道连接、获取输入流或解码器创建失败返回 [Result.failure]。
+     */
     suspend fun start(displayId: Int, surface: Surface?, w: Int, h: Int): Result<Unit> = mutex.withLock {
         Log.i(TAG, "Starting video stream for display $displayId... (surface=$surface valid=${surface?.isValid} dims=${w}x${h})")
 
@@ -123,6 +141,7 @@ class VideoStreamController(
         }
     }
 
+    /** 停止视频流：取消 ping、断开 Scrcpy 子通道并停止/释放解码器。幂等，需在协程上下文中调用。 */
     suspend fun stop() = mutex.withLock {
         stopInternal()
     }
@@ -146,10 +165,21 @@ class VideoStreamController(
         Log.i(TAG, "VideoStreamController stopped")
     }
 
+    /**
+     * 切换渲染 surface，透传给底层解码器。
+     *
+     * @param surface 目标 surface；为 null 时改用内部 dummy surface。
+     */
     fun setSurface(surface: Surface?) {
         decoder?.setDisplaySurface(surface)
     }
 
+    /**
+     * 更新解码分辨率，透传给底层解码器（尺寸变化时触发 codec 重建）。
+     *
+     * @param w 新宽度。
+     * @param h 新高度。
+     */
     fun updateResolution(w: Int, h: Int) {
         decoder?.updateResolution(w, h)
     }

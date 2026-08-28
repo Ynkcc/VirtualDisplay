@@ -8,7 +8,13 @@ import com.ynk.virtualdisplay.protocol.DeviceMessage
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * 状态枚举定义
+ * 连接状态机取值。
+ * - [IDLE]：初始空闲，尚未开始连接；
+ * - [BINDING]：正在拉起 daemon / 建立 transport 连接；
+ * - [CONNECTED]：已连接，可进行操作；
+ * - [DISCONNECTED]：已断开（主动解绑或重连放弃）；
+ * - [ERROR]：发生不可恢复错误；
+ * - [RECONNECTING]：连接丢失，正在后台自动重连。
  */
 enum class ConnectionStatus {
     IDLE,
@@ -28,6 +34,7 @@ enum class ConnectionStatus {
  */
 interface IDisplayRepository {
     companion object {
+        /** 用于请求系统权限（如创建虚拟显示器）的 Activity Result 请求码。 */
         const val REQUEST_CODE = 20260
     }
 
@@ -130,22 +137,29 @@ interface IDisplayRepository {
     fun allSlots(): Collection<IDisplayRepository> = emptyList()
 }
 
-/** 虚拟显示器持有者信息 */
+/**
+ * 虚拟显示器的持有者信息。
+ * @property packageName 持有者应用包名，可为空
+ * @property uid 持有者进程 uid
+ */
 data class DisplayOwner(
     val packageName: String? = null,
     val uid: Int = 0
 )
 
 /**
- * 辅助管理用户在虚拟屏幕中最近启动的 app 记录
+ * 便捷门面：读取/记录用户在虚拟屏幕中最近启动的应用（当前节点），
+ * 内部委托 [AppSettings.recentApps] 相关实现，并固定最大条数。
  */
 object RecentAppHelper {
     private const val MAX_LIMIT = 10
 
+    /** 读取当前节点最近启动的应用包名列表（新→旧）。 */
     suspend fun getRecentApps(context: Context): List<String> {
         return AppSettings.recentApps(context)
     }
 
+    /** 将应用加入当前节点最近启动列表，超出上限自动截断。 */
     suspend fun addRecentApp(context: Context, packageName: String) {
         AppSettings.addRecentApp(context, packageName, MAX_LIMIT)
     }

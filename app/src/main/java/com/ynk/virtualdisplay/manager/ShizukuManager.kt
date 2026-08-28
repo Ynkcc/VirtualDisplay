@@ -25,10 +25,12 @@ class ShizukuManager {
 
     companion object {
         private const val TAG = "ShizukuManager"
+        /** Shizuku 权限请求码，供 Activity 回调区分授权来源 */
         const val REQUEST_CODE = 20260
     }
 
     private val _shizukuState = MutableStateFlow<ShizukuState>(ShizukuState.Checking)
+    /** 当前 Shizuku 状态流，供 UI 订阅；随 binder / 权限变化而更新 */
     val shizukuState: StateFlow<ShizukuState> = _shizukuState.asStateFlow()
 
     private val permissionListener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
