@@ -409,11 +409,28 @@ class ConnectionSlot(
     private suspend fun startStreamingToDisplay(displayId: Int): Result<Unit> {
         if (currentStreamingDisplayId == displayId) return Result.success(Unit)
         if (currentStreamingDisplayId != -1) runCatching { videoController.stop() }
-        val result = videoController.start(displayId, decoderSurface, DEFAULT_WIDTH, DEFAULT_HEIGHT)
+
+        // 用真实 VD 尺寸配置解码器，而不是固定 DEFAULT_WIDTH/HEIGHT：视频全屏切横屏后
+        // VD 尺寸会变化（未必是 1920x1080），若解码器仍以固定尺寸创建，硬件解码器会对
+        // 不匹配的帧输出错误的 crop/可见区域，表现为画面只显示一半。
+        var width = DEFAULT_WIDTH
+        var height = DEFAULT_HEIGHT
+        runCatching {
+            remoteDataSource.getActiveDisplayInfos().getOrNull()
+                ?.firstOrNull { it.displayId == displayId }
+                ?.let { info ->
+                    if (info.width > 0 && info.height > 0) {
+                        width = info.width
+                        height = info.height
+                    }
+                }
+        }
+
+        val result = videoController.start(displayId, decoderSurface, width, height)
         if (result.isSuccess) {
             currentStreamingDisplayId = displayId
-            currentVideoWidth = DEFAULT_WIDTH
-            currentVideoHeight = DEFAULT_HEIGHT
+            currentVideoWidth = width
+            currentVideoHeight = height
         }
         return result
     }

@@ -359,16 +359,7 @@ class DisplayActivity : ComponentActivity() {
         inputController.updateVideoSize(width, height)
         videoSurfaceView.setVideoSize(width, height)
 
-        val viewW = rootLayout.width
-        val viewH = rootLayout.height
-        if (viewW > 0 && viewH > 0) {
-            // 根据宽高比自动调整旋转角度
-            // 如果画面变横屏（w > h）但 Activity 还是竖屏（w < h），则需要旋转
-            val needRotate = (width > height) != (viewW > viewH)
-            currentVideoRotation = if (needRotate) 90 else 0
-            inputController.setVideoRotation(currentVideoRotation)
-            updateContentRect()
-        }
+        recalculateVideoRotation()
 
         applyOrientationForVideo(width, height)
     }
@@ -488,8 +479,35 @@ class DisplayActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 重新评估视频旋转角度。视频在服务端始终以原始方向渲染（VD 冻结在 ROTATION_0），
+     * 是否需要在客户端坐标系中旋转完全取决于「视频宽高比」与「当前 view 宽高比」是否一致。
+     *
+     * 该角度必须在两处时机都重新计算：
+     *  1. onVideoConfigChanged —— 视频尺寸变化（如应用切到横屏），此时 view 可能还是旧方向；
+     *  2. updateContentRect（布局变化）—— Activity 旋转（configChanges 不重建）后 view 已换方向，
+     *     但视频尺寸未再变化。若只在时机 1 计算，rotation 会卡在旧值导致触摸坐标永久错乱。
+     */
+    private fun recalculateVideoRotation() {
+        if (!::inputController.isInitialized || !::rootLayout.isInitialized) return
+        if (videoWidth <= 0 || videoHeight <= 0) return
+        val viewW = rootLayout.width
+        val viewH = rootLayout.height
+        if (viewW <= 0 || viewH <= 0) return
+
+        val needRotate = (videoWidth > videoHeight) != (viewW > viewH)
+        val newRotation = if (needRotate) 90 else 0
+        if (newRotation != currentVideoRotation) {
+            Log.i(TAG, "recalculateVideoRotation: view=${viewW}x${viewH} video=${videoWidth}x${videoHeight} -> rotation=$newRotation")
+            currentVideoRotation = newRotation
+            inputController.setVideoRotation(newRotation)
+            inputController.getContentRect(rootLayout)
+        }
+    }
+
     private fun updateContentRect() {
         if (::inputController.isInitialized && ::rootLayout.isInitialized) {
+            recalculateVideoRotation()
             inputController.getContentRect(rootLayout)
         }
     }
