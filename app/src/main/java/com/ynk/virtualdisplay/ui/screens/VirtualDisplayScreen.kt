@@ -95,7 +95,7 @@ fun VirtualDisplayScreen(
     // App Selection Dialog Handler
     showAppSelectionDialogForDisplayId?.let { displayId ->
         AppSelectionDialog(
-            loadApps = { viewModel.listApps() },
+            loadApps = { force -> viewModel.listApps(force) },
             onDismiss = { showAppSelectionDialogForDisplayId = null },
             onAppSelected = { appInfo ->
                 viewModel.launchSelectedApp(appInfo.packageName, displayId)

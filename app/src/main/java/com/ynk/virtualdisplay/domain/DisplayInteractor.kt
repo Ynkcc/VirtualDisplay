@@ -228,9 +228,11 @@ class DisplayInteractor(
 
     /**
      * 查询远程设备上已安装应用列表。
+     *
+     * @param forceRefresh 为 true 时忽略缓存强制向 daemon 重新拉取（用于下拉刷新）
      */
-    suspend fun listApps(): Result<List<DeviceMessage.AppEntry>> {
-        return repository.listApps()
+    suspend fun listApps(forceRefresh: Boolean = false): Result<List<DeviceMessage.AppEntry>> {
+        return repository.listApps(forceRefresh)
     }
 
     /**

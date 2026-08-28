@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,6 +21,7 @@ import com.ynk.virtualdisplay.data.model.AppInfo
 import com.ynk.virtualdisplay.data.repository.RecentAppHelper
 import com.ynk.virtualdisplay.protocol.DeviceMessage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -31,9 +33,10 @@ import kotlinx.coroutines.withContext
  * 列表按「最近启动 / 用户应用 / 系统应用」分组展示，
  * 系统/用户由 [DeviceMessage.AppEntry.isSystem] 区分。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppSelectionDialog(
-    loadApps: suspend () -> Result<List<DeviceMessage.AppEntry>>,
+    loadApps: suspend (forceRefresh: Boolean) -> Result<List<DeviceMessage.AppEntry>>,
     onDismiss: () -> Unit,
     onAppSelected: (AppInfo) -> Unit
 ) {
@@ -41,20 +44,35 @@ fun AppSelectionDialog(
     var apps by remember { mutableStateOf<List<DeviceMessage.AppEntry>>(emptyList()) }
     var recentPkgs by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var isRefreshing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     // 默认不显示系统应用，通过顶部开关切换
     var showSystemApps by remember { mutableStateOf(false) }
     // 搜索关键字，匹配应用名称或包名
     var searchQuery by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
 
+    suspend fun loadAppList(forceRefresh: Boolean) {
+        withContext(Dispatchers.IO) {
+            loadApps(forceRefresh)
+                .onSuccess { apps = it; error = null }
+                .onFailure { error = it.message ?: "Failed to load apps" }
+        }
+    }
+
+    suspend fun refresh() {
+        isRefreshing = true
+        loadAppList(forceRefresh = true)
+        isRefreshing = false
+    }
+
+    // 首次打开：loadApps(false) 命中缓存时立即返回，无需再走慢速 RPC
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
             recentPkgs = RecentAppHelper.getRecentApps(context)
-            loadApps()
-                .onSuccess { apps = it }
-                .onFailure { error = it.message ?: "Failed to load apps" }
-            isLoading = false
         }
+        loadAppList(forceRefresh = false)
+        isLoading = false
     }
 
     // 搜索时同时匹配应用名称与包名（大小写不敏感）
@@ -122,12 +140,13 @@ fun AppSelectionDialog(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 when {
-                    isLoading -> {
+                    // 仅首次加载且无缓存时显示全屏 loading；有缓存（apps 非空）时直接展示旧数据
+                    apps.isEmpty() && isLoading -> {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             CircularProgressIndicator()
                         }
                     }
-                    error != null -> {
+                    apps.isEmpty() && error != null -> {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(text = error!!, color = MaterialTheme.colorScheme.error)
@@ -136,55 +155,63 @@ fun AppSelectionDialog(
                             }
                         }
                     }
-                    apps.isEmpty() -> {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(text = "No apps found")
-                        }
-                    }
-                    filtered.isEmpty() -> {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(
-                                text = if (query.isNotEmpty()) "未找到匹配的应用" else "没有可显示的应用",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
                     else -> {
-                        LazyColumn {
-                            if (recentList.isNotEmpty()) {
-                                item(key = "header_recent") {
-                                    SectionHeader(text = "最近启动", isRecent = true)
-                                }
-                                items(recentList, key = { "recent_${it.packageName}" }) { app ->
-                                    AppRow(
-                                        app = app,
-                                        isRecent = true,
-                                        onClick = { onAppSelected(AppInfo(app.name, app.packageName)) }
-                                    )
-                                }
-                            }
-                            if (userApps.isNotEmpty()) {
-                                item(key = "header_user") {
-                                    SectionHeader(text = "用户应用", isRecent = false)
-                                }
-                                items(userApps, key = { "user_${it.packageName}" }) { app ->
-                                    AppRow(
-                                        app = app,
-                                        isRecent = false,
-                                        onClick = { onAppSelected(AppInfo(app.name, app.packageName)) }
-                                    )
-                                }
-                            }
-                            if (showSystemApps && systemApps.isNotEmpty()) {
-                                item(key = "header_system") {
-                                    SectionHeader(text = "系统应用", isRecent = false)
-                                }
-                                items(systemApps, key = { "system_${it.packageName}" }) { app ->
-                                    AppRow(
-                                        app = app,
-                                        isRecent = false,
-                                        onClick = { onAppSelected(AppInfo(app.name, app.packageName)) }
-                                    )
+                        // 下拉刷新：重新向 daemon 拉取并更新缓存
+                        PullToRefreshBox(
+                            isRefreshing = isRefreshing,
+                            onRefresh = { scope.launch { refresh() } },
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            LazyColumn {
+                                if (filtered.isEmpty()) {
+                                    item(key = "empty") {
+                                        Box(
+                                            modifier = Modifier.fillParentMaxSize(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = if (query.isNotEmpty()) "未找到匹配的应用" else "没有可显示的应用",
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    if (recentList.isNotEmpty()) {
+                                        item(key = "header_recent") {
+                                            SectionHeader(text = "最近启动", isRecent = true)
+                                        }
+                                        items(recentList, key = { "recent_${it.packageName}" }) { app ->
+                                            AppRow(
+                                                app = app,
+                                                isRecent = true,
+                                                onClick = { onAppSelected(AppInfo(app.name, app.packageName)) }
+                                            )
+                                        }
+                                    }
+                                    if (userApps.isNotEmpty()) {
+                                        item(key = "header_user") {
+                                            SectionHeader(text = "用户应用", isRecent = false)
+                                        }
+                                        items(userApps, key = { "user_${it.packageName}" }) { app ->
+                                            AppRow(
+                                                app = app,
+                                                isRecent = false,
+                                                onClick = { onAppSelected(AppInfo(app.name, app.packageName)) }
+                                            )
+                                        }
+                                    }
+                                    if (showSystemApps && systemApps.isNotEmpty()) {
+                                        item(key = "header_system") {
+                                            SectionHeader(text = "系统应用", isRecent = false)
+                                        }
+                                        items(systemApps, key = { "system_${it.packageName}" }) { app ->
+                                            AppRow(
+                                                app = app,
+                                                isRecent = false,
+                                                onClick = { onAppSelected(AppInfo(app.name, app.packageName)) }
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }

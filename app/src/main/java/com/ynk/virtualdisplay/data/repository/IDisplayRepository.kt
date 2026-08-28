@@ -85,8 +85,13 @@ interface IDisplayRepository {
     /** 在指定显示器启动主屏幕/Launcher */
     suspend fun launchHome(displayId: Int): Result<Int>
 
-    /** 列出远程设备上已安装应用（用于 AppSelectionDialog） */
-    suspend fun listApps(): Result<List<DeviceMessage.AppEntry>>
+    /**
+     * 列出远程设备上已安装应用（用于 AppSelectionDialog）。
+     *
+     * 默认使用缓存（若有）以加快重复打开对话框的速度；[forceRefresh] 为
+     * true 时强制向 daemon 重新拉取并更新缓存（用于下拉刷新）。
+     */
+    suspend fun listApps(forceRefresh: Boolean = false): Result<List<DeviceMessage.AppEntry>>
 
     /** 注入输入事件 */
     suspend fun injectInput(event: InputEvent): Result<Boolean>

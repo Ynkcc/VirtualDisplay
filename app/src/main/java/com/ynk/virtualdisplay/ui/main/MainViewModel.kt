@@ -405,8 +405,8 @@ class MainViewModel(
         return interactor.launchHome(displayId)
     }
 
-    suspend fun listApps(): Result<List<com.ynk.virtualdisplay.protocol.DeviceMessage.AppEntry>> {
-        return interactor.listApps()
+    suspend fun listApps(forceRefresh: Boolean = false): Result<List<com.ynk.virtualdisplay.protocol.DeviceMessage.AppEntry>> {
+        return interactor.listApps(forceRefresh)
     }
 
     // === 重启服务 ===

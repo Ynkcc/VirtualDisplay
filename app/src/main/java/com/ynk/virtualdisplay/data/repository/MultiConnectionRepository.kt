@@ -131,8 +131,8 @@ class MultiConnectionRepository(
     override suspend fun launchHome(displayId: Int): Result<Int> =
         activeSlot?.launchHome(displayId) ?: Result.failure(noActiveSlotError())
 
-    override suspend fun listApps(): Result<List<DeviceMessage.AppEntry>> =
-        activeSlot?.listApps() ?: Result.failure(noActiveSlotError())
+    override suspend fun listApps(forceRefresh: Boolean): Result<List<DeviceMessage.AppEntry>> =
+        activeSlot?.listApps(forceRefresh) ?: Result.failure(noActiveSlotError())
 
     override suspend fun injectInput(event: InputEvent): Result<Boolean> =
         activeSlot?.injectInput(event) ?: Result.failure(noActiveSlotError())

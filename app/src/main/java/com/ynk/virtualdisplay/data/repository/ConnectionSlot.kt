@@ -90,6 +90,9 @@ class ConnectionSlot(
     private val reconnectLock = Any()
     @Volatile private var reconnectJob: Job? = null
 
+    /** 已拉取的应用列表缓存（按连接槽隔离，切换/断开节点时随槽销毁而失效） */
+    private val appsCache = java.util.concurrent.atomic.AtomicReference<List<DeviceMessage.AppEntry>?>(null)
+
     init {
         scope.launch {
             rpc.connectionState.collect { state ->
@@ -466,8 +469,14 @@ class ConnectionSlot(
     override suspend fun launchHome(displayId: Int): Result<Int> =
         remoteDataSource.launchHome(displayId)
 
-    override suspend fun listApps(): Result<List<DeviceMessage.AppEntry>> =
-        remoteDataSource.listApps()
+    override suspend fun listApps(forceRefresh: Boolean): Result<List<DeviceMessage.AppEntry>> {
+        appsCache.get()?.let { cached ->
+            if (!forceRefresh) return Result.success(cached)
+        }
+        val result = remoteDataSource.listApps()
+        result.onSuccess { appsCache.set(it) }
+        return result
+    }
 
     override suspend fun injectInput(event: InputEvent): Result<Boolean> =
         injectInputWithDisplayId(event, 0)

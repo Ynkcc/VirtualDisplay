@@ -23,7 +23,6 @@ android {
         applicationId = "com.ynk.virtualdisplay"
         minSdk = 29
         targetSdk = 36
-        resConfigs("zh", "en")
 
         val commitCount = providers.exec {
             commandLine("git", "rev-list", "--count", "HEAD")
@@ -116,6 +115,12 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
+    }
+
+    androidResources {
+        // Replaces the deprecated resConfigs() DSL; keeps only zh/en resources
+        // in the APK while filtering them at the resource level.
+        localeFilters += setOf("zh", "en")
     }
 
     buildFeatures {

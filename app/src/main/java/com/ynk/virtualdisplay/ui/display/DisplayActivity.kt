@@ -611,7 +611,7 @@ class DisplayActivity : ComponentActivity() {
         rootLayout.addView(composeView)
         composeView.setContent {
             AppSelectionDialog(
-                loadApps = { repository.listApps() },
+                loadApps = { force -> repository.listApps(force) },
                 onDismiss = { rootLayout.removeView(composeView) },
                 onAppSelected = { appInfo ->
                     rootLayout.removeView(composeView)
