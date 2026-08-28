@@ -68,6 +68,12 @@ class MainViewModel(
         viewModelScope.launch {
             interactor.connectionStatus.collect { status ->
                 _uiState.update { it.copy(connectionStatus = status) }
+                // 连接建立后立即重新评估孤儿/接管状态。
+                // 否则进入页面时 orphan 判定可能基于尚未更新的连接状态/快照执行，
+                // 且 managedDisplayIds 可能因值与初值相同而不发射，导致误判为“已连接”。
+                if (status == ConnectionStatus.CONNECTED) {
+                    refreshDisplaysInternal()
+                }
             }
         }
 
@@ -166,7 +172,7 @@ class MainViewModel(
                 }
             } else if (mode == com.ynk.virtualdisplay.data.PrivilegeMode.ROOT) {
                 viewModelScope.launch(Dispatchers.IO) {
-                    val isRoot = isRootAvailable()
+                    val isRoot = interactor.isRootAvailable()
                     _uiState.update { it.copy(rootAvailable = isRoot) }
                     if (isRoot) {
                         interactor.bindService()
@@ -227,25 +233,8 @@ class MainViewModel(
     private fun checkRootPermission() {
         _uiState.update { it.copy(rootChecking = true) }
         viewModelScope.launch(Dispatchers.IO) {
-            val isRoot = isRootAvailable()
+            val isRoot = interactor.isRootAvailable()
             _uiState.update { it.copy(rootAvailable = isRoot, rootChecking = false) }
-        }
-    }
-
-    private fun isRootAvailable(): Boolean {
-        var process: Process? = null
-        return try {
-            process = Runtime.getRuntime().exec("su")
-            process.outputStream.use { os ->
-                os.write("exit\n".toByteArray())
-                os.flush()
-            }
-            val exitCode = process.waitFor()
-            exitCode == 0
-        } catch (e: Exception) {
-            false
-        } finally {
-            process?.destroy()
         }
     }
 
@@ -258,7 +247,6 @@ class MainViewModel(
 
     private fun refreshDisplaysInternal() {
         interactor.refreshDisplays()
-        val managedByService = interactor.managedDisplayIds.value
         val currentNode = _uiState.value.currentServerNode
 
         viewModelScope.launch {
@@ -274,11 +262,15 @@ class MainViewModel(
                 )
             }
 
-            val orphans = mutableListOf<Int>()
-            displaysList.forEach { display ->
-                if (interactor.connectionStatus.value == ConnectionStatus.CONNECTED && display.id !in managedByService) {
-                    orphans.add(display.id)
-                }
+            // 在协程内读取“当前”状态：进入函数时 managedDisplayIds 可能尚未随异步刷新完成更新，
+            // 若在函数入口捕获快照，刚进入页面时孤儿显示器会被误判为“已连接”，须手动刷新才恢复。
+            val managedByService = interactor.managedDisplayIds.value
+            val isConnected = interactor.connectionStatus.value == ConnectionStatus.CONNECTED
+
+            val orphans = if (isConnected) {
+                displaysList.filter { it.id !in managedByService }.map { it.id }
+            } else {
+                emptyList()
             }
 
             _uiState.update { it.copy(

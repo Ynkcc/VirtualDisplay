@@ -96,15 +96,64 @@ class DisplayInteractor(
 
     /**
      * 重启守护进程：完整停止（杀进程+断连）→ 延迟 → 重新启动并连接。
+     *
+     * 重新启动阶段复用 [startDaemon] 的统一权限预检，保证与手动启动语义一致
+     * （Root / Shizuku 未授权时重启也会失败并提示）。
      */
-    suspend fun restartDaemon(): Result<Unit> = runCatching {
-        repository.stopDaemon().getOrThrow()
+    suspend fun restartDaemon(): Result<Unit> {
+        val stopped = repository.stopDaemon()
+        if (stopped.isFailure) return stopped
         delay(500)
-        repository.startDaemon().getOrThrow()
+        return startDaemon()
     }
 
+    /**
+     * 启动服务端进程并建立连接（手动启动入口）。
+     *
+     * 本地节点 + 特权模式下，启动前统一预检 Shizuku / Root 权限，
+     * 未授权时返回携带明确中文信息的 [Result.failure]，由 ViewModel 直接提示用户。
+     * 远程节点无需特权，跳过预检。
+     */
     suspend fun startDaemon(): Result<Unit> {
+        val node = AppSettings.getCurrentServerNodeSync()
+        val mode = AppSettings.getPrivilegeModeSync()
+        val isLocal = node.host == com.ynk.virtualdisplay.util.NetUtils.LOCAL_HOST ||
+            node.host == "localhost"
+        if (isLocal && mode != PrivilegeMode.NONE) {
+            when (mode) {
+                PrivilegeMode.SHIZUKU ->
+                    if (!shizukuManager.isAvailable()) {
+                        return Result.failure(PrivilegeException("Shizuku 未就绪，请先启动 Shizuku 并授权"))
+                    }
+                PrivilegeMode.ROOT ->
+                    if (!isRootAvailable()) {
+                        return Result.failure(PrivilegeException("Root 未授权，无法启动服务端"))
+                    }
+                PrivilegeMode.NONE -> {}
+            }
+        }
         return repository.startDaemon()
+    }
+
+    /**
+     * 检测当前设备是否可用 Root（通过 [su] 探测）。
+     * 仅在 [Dispatchers.IO] 等后台线程调用，避免阻塞主线程。
+     */
+    suspend fun isRootAvailable(): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        var process: Process? = null
+        try {
+            process = Runtime.getRuntime().exec("su")
+            process.outputStream.use { os ->
+                os.write("exit\n".toByteArray())
+                os.flush()
+            }
+            val exitCode = process.waitFor()
+            exitCode == 0
+        } catch (e: Exception) {
+            false
+        } finally {
+            try { process?.destroy() } catch (_: Exception) {}
+        }
     }
 
     suspend fun stopDaemon(): Result<Unit> {

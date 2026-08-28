@@ -197,7 +197,7 @@ class DaemonTransport {
                 // NOTE: a wrong / missing token will get 127.0.0.1 blacklisted for
                 // the daemon's runtime — this path trusts the caller passed the
                 // same token used to start the daemon (it is read from settings
-                // in DaemonDisplayRepository.bindService / autoReconnect).
+                // in the repository bindService / autoReconnect flow).
                 if (secretToken != null && secretToken.isNotEmpty()) {
                     DaemonHandshake.writeToken(out, secretToken)
                 }

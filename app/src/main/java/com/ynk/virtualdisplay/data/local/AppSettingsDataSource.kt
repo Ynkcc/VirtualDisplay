@@ -13,8 +13,8 @@ import kotlinx.coroutines.flow.Flow
  *
  * 属于 appModule：依赖 AppSettings.init()，只有在 bootstrapCore 后才可用。
  *
- * 当前主要暴露 [DaemonDisplayRepository] 实际使用到的读写方法，
- * 后续可按业务需求逐步扩展（setter 方法等）。
+ * 当前主要暴露 Repository 层（如 [com.ynk.virtualdisplay.data.repository.ConnectionSlot]）
+ * 实际使用到的读写方法，后续可按业务需求逐步扩展（setter 方法等）。
  */
 class AppSettingsDataSource(private val context: Context) {
 

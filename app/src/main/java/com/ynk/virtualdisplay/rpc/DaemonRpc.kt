@@ -28,9 +28,9 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * DaemonRpc 的连接/运行状态。
  *
- * 用于让上层 [DaemonDisplayRepository] 监听到 negotiation socket 被远端关闭
- * （例如 App 切屏切换流导致的 210 失败后紧跟着 EOF），从而自动重连而不是让 UI
- * 永久处于"所有 RPC 都超时/ Connection error"的状态。
+ * 用于让上层（如 [com.ynk.virtualdisplay.data.repository.ConnectionSlot]）监听到
+ * negotiation socket 被远端关闭（例如 App 切屏切换流导致的 210 失败后紧跟着 EOF），
+ * 从而自动重连而不是让 UI 永久处于"所有 RPC 都超时/ Connection error"的状态。
  */
 enum class DaemonRpcState {
     IDLE,

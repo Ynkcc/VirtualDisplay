@@ -182,65 +182,75 @@ class ConnectionSlot(
 
     override fun bindService() {
         if (isBound) return
-        isBound = true
-
         scope.launch {
-            try {
-                _connectionStatus.value = ConnectionStatus.BINDING
-                val host = if (node.host == "0.0.0.0") "127.0.0.1" else node.host
-                val port = node.port
-                val password = node.password
-                val privilegeMode = AppSettings.getPrivilegeModeSync()
+            connectInternal(enforceAutoStart = true)
+        }
+    }
 
-                if (node.isLocal && processDataSource != null && privilegeMode != PrivilegeMode.NONE) {
-                    if (privilegeMode == PrivilegeMode.SHIZUKU && !shizukuManager.isAvailable()) {
-                        _connectionError.value = "Shizuku is not available"
-                        _connectionStatus.value = ConnectionStatus.ERROR
-                        return@launch
-                    }
+    /**
+     * 启动并建立服务端连接的核心流程。
+     *
+     * @param enforceAutoStart 仅自动启动入口为 true：受 "自动启动服务端" 开关约束，
+     * 关闭且 daemon 未运行时静默跳过。手动启动（[startDaemon]）传 false，强制拉起
+     * daemon 并连接，不受开关影响。
+     * @return 启动+连接结果，失败时 [Result.failure] 携带用户可读的中文错误。
+     */
+    private suspend fun connectInternal(enforceAutoStart: Boolean): Result<Unit> {
+        _connectionStatus.value = ConnectionStatus.BINDING
+        val host = if (node.host == "0.0.0.0") "127.0.0.1" else node.host
+        val port = node.port
+        val password = node.password
+        val privilegeMode = AppSettings.getPrivilegeModeSync()
+
+        try {
+            if (node.isLocal && processDataSource != null && privilegeMode != PrivilegeMode.NONE) {
+                if (privilegeMode == PrivilegeMode.SHIZUKU && !shizukuManager.isAvailable()) {
+                    throw com.ynk.virtualdisplay.domain.PrivilegeException("Shizuku 未就绪，请先启动 Shizuku 并授权")
+                }
+                if (enforceAutoStart) {
                     val autoStart = AppSettings.getAutoStartServerSync()
                     val isRunning = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() > 0 }
                     if (!autoStart && !isRunning) {
                         _connectionStatus.value = ConnectionStatus.DISCONNECTED
-                        return@launch
+                        return Result.success(Unit)
                     }
-                    val started = withContext(Dispatchers.IO) {
-                        processDataSource.startDaemon(port, node.host, password)
-                    }
-                    if (!started) {
-                        _connectionError.value = "Failed to start daemon process"
-                        _connectionStatus.value = ConnectionStatus.ERROR
-                        return@launch
-                    }
-                    _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
-                } else {
-                    _daemonPid.value = -1
                 }
+                val started = withContext(Dispatchers.IO) {
+                    processDataSource.startDaemon(port, node.host, password)
+                }
+                if (!started) {
+                    throw com.ynk.virtualdisplay.domain.PrivilegeException("启动服务端进程失败")
+                }
+                _daemonPid.value = withContext(Dispatchers.IO) { processDataSource.getDaemonPid() }
+            } else {
+                _daemonPid.value = -1
+            }
 
-                val connected = try {
-                    transport.connect(host, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
-                } catch (t: Throwable) {
-                    val err = com.ynk.virtualdisplay.util.NetUtils.getFriendlyErrorMessage(t)
-                    _connectionError.value = err
-                    _connectionStatus.value = ConnectionStatus.ERROR
-                    false
-                }
-                if (connected) {
-                    rpc.startMessageLoop(scope)
-                    _connectionStatus.value = ConnectionStatus.CONNECTED
-                    _connectionError.value = null
-                    refreshManagedDisplays()
-                } else if (_connectionError.value == null) {
-                    val err = "连接失败：无法建立到 ${host}:${port} 的连接。"
-                    _connectionError.value = err
-                    _connectionStatus.value = ConnectionStatus.ERROR
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "[${node.uniqueKey()}] bindService failed", e)
-                val err = com.ynk.virtualdisplay.util.NetUtils.getFriendlyErrorMessage(e)
+            val connected = try {
+                transport.connect(host, port, 5000, secretToken = password.takeIf { it.isNotEmpty() })
+            } catch (t: Throwable) {
+                val err = com.ynk.virtualdisplay.util.NetUtils.getFriendlyErrorMessage(t)
+                _connectionError.value = err
+                _connectionStatus.value = ConnectionStatus.ERROR
+                false
+            }
+            if (connected) {
+                rpc.startMessageLoop(scope)
+                _connectionStatus.value = ConnectionStatus.CONNECTED
+                _connectionError.value = null
+                refreshManagedDisplays()
+            } else if (_connectionError.value == null) {
+                val err = "连接失败：无法建立到 ${host}:${port} 的连接。"
                 _connectionError.value = err
                 _connectionStatus.value = ConnectionStatus.ERROR
             }
+            return Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "[${node.uniqueKey()}] connectInternal failed", e)
+            val err = com.ynk.virtualdisplay.util.NetUtils.getFriendlyErrorMessage(e)
+            _connectionError.value = err
+            _connectionStatus.value = ConnectionStatus.ERROR
+            return Result.failure(e)
         }
     }
 
@@ -270,17 +280,16 @@ class ConnectionSlot(
     }
 
     override suspend fun startDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching {
-            if (_connectionStatus.value == ConnectionStatus.CONNECTED) return@runCatching
-            if (isBound) {
-                val job = withContext(Dispatchers.Main) {
-                    isBound = false
-                    launchCleanupOnce(killDaemon = false)
-                }
-                withTimeoutOrNull(1000) { job.join() }
+        if (_connectionStatus.value == ConnectionStatus.CONNECTED) return@withContext Result.success(Unit)
+        if (isBound) {
+            val job = withContext(Dispatchers.Main) {
+                isBound = false
+                launchCleanupOnce(killDaemon = false)
             }
-            withContext(Dispatchers.Main) { bindService() }
+            withTimeoutOrNull(1000) { job.join() }
         }
+        // 手动启动强制拉起 daemon 并连接，不受 "自动启动服务端" 开关约束。
+        connectInternal(enforceAutoStart = false)
     }
 
     override suspend fun stopDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
