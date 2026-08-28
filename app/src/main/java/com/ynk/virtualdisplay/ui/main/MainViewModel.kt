@@ -271,6 +271,13 @@ class MainViewModel(
 
             val savedDisplays = AppSettings.getDisplaysForServer(appContext, currentNode)
             val owners = interactor.displayOwners.value
+            // 在协程内读取“当前”状态：进入函数时 managedDisplayIds 可能尚未随异步刷新完成更新，
+            // 若在函数入口捕获快照，刚进入页面时孤儿显示器会被误判为“已连接”，须手动刷新才恢复。
+            // managedByService 来自服务端实时上报的 owned display ids —— 它才是“本 app 创建/接管”
+            // 的唯一权威来源。isOwned 也必须以它为准，而非磁盘上可能过期的 SavedDisplay.isOwned，
+            // 否则会出现“显示器明明由本 daemon 创建却显示为非本 app 创建”的误判。
+            val managedByService = interactor.managedDisplayIds.value
+
             val displaysList = savedDisplays.map { display ->
                 val owner = owners[display.id]
                 DisplayInfoModel(
@@ -280,15 +287,11 @@ class MainViewModel(
                     height = display.height,
                     dpi = display.dpi,
                     mirrorDisplayId = display.mirrorDisplayId,
-                    isOwned = display.isOwned,
+                    isOwned = display.id in managedByService,
                     ownerPackage = owner?.packageName,
                     ownerUid = owner?.uid ?: 0
                 )
             }
-
-            // 在协程内读取“当前”状态：进入函数时 managedDisplayIds 可能尚未随异步刷新完成更新，
-            // 若在函数入口捕获快照，刚进入页面时孤儿显示器会被误判为“已连接”，须手动刷新才恢复。
-            val managedByService = interactor.managedDisplayIds.value
 
             val orphans = if (isConnected) {
                 displaysList.filter { it.id !in managedByService }.map { it.id }

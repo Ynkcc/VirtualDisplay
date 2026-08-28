@@ -23,6 +23,11 @@ class DaemonTransport {
         private const val CONNECT_TIMEOUT_MS = 3000
         // Socket read timeout (ms) for socket input streams.
         private const val SOCKET_READ_TIMEOUT_MS = 30_000
+        // Timeout (ms) for reading the displayId ack on freshly-opened role
+        // sockets (ROLE_CONTROL / ROLE_VIDEO). Guards against the server accept
+        // loop being busy/stuck and never replying — without it a half-open
+        // socket would block this coroutine forever and "操控" would hang.
+        private const val HANDSHAKE_ACK_TIMEOUT_MS = 10_000
         // Initial delay for retries.
         private const val RETRY_BASE_DELAY_MS = 100L
     }
@@ -91,18 +96,23 @@ class DaemonTransport {
 
             val ctrl = Socket()
             ctrl.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-            // NOTE: do NOT touch ctrl.soTimeout here. This client-side setting
-            // only affects reads on this local socket and has no effect on the
-            // server's Controller thread. The server already keeps its control
-            // loop alive across idle timeouts (ControlChannel#recvKeepingAlive),
-            // so the socket keeps the default 0 (no timeout) on the client.
             controlSocket = ctrl
 
             val ctrlOut = ctrl.getOutputStream()
             DaemonHandshake.writeRole(ctrlOut, DaemonSocketRole.ROLE_CONTROL)
             DaemonHandshake.writeSessionId(ctrlOut, currentSession.sessionId)
             DaemonHandshake.writeDisplayId(ctrlOut, displayId)
-            val ctrlAck = DaemonHandshake.readInt32(ctrl.inputStream)
+            // Guard the ack read with a bounded timeout: if the server's role
+            // dispatch is busy/stuck it won't reply, and without this a
+            // half-open socket would block "操控" forever. Restore 0 (no
+            // timeout) afterwards so the long-lived control read loop is not
+            // affected by the idle keep-alive on the server side.
+            ctrl.soTimeout = HANDSHAKE_ACK_TIMEOUT_MS
+            val ctrlAck = try {
+                DaemonHandshake.readInt32(ctrl.inputStream)
+            } finally {
+                ctrl.soTimeout = 0
+            }
             if (ctrlAck != displayId) {
                 throw IOException("Control socket displayId ack mismatch: expected $displayId, server ack=$ctrlAck")
             }
@@ -113,14 +123,20 @@ class DaemonTransport {
 
             val video = Socket()
             video.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS)
-            video.soTimeout = 0
             videoSocket = video
 
             val videoOut = video.getOutputStream()
             DaemonHandshake.writeRole(videoOut, DaemonSocketRole.ROLE_VIDEO)
             DaemonHandshake.writeSessionId(videoOut, currentSession.sessionId)
             DaemonHandshake.writeDisplayId(videoOut, displayId)
-            val videoAck = DaemonHandshake.readInt32(video.inputStream)
+            // Same bounded ack guard as the control socket; video stays on
+            // timeout 0 after the ack since the decoder blocks on it.
+            video.soTimeout = HANDSHAKE_ACK_TIMEOUT_MS
+            val videoAck = try {
+                DaemonHandshake.readInt32(video.inputStream)
+            } finally {
+                video.soTimeout = 0
+            }
             if (videoAck != displayId) {
                 throw IOException("Video socket displayId ack mismatch: expected $displayId, server ack=$videoAck")
             }

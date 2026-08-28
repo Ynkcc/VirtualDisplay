@@ -100,6 +100,19 @@ class DaemonProcessController(private val context: Context) {
                 Log.i(TAG, "Daemon is running with pid $existingPid on port $port but different address. Stopping it to restart with address $address...")
                 stopDaemon()
             }
+        } else {
+            // PID could not be resolved (e.g. pgrep denied under some
+            // privilege modes), but the port may already be served. In that
+            // case the daemon is effectively up — reusing it avoids a spurious
+            // second spawn (and a later mismatched kill of the right process).
+            // This is the "restart the app / re-select 本机 makes it work"
+            // path: the previous daemon was alive all along.
+            if (isPortOpen(address, port)) {
+                Log.i(TAG, "Port $port already accepting on $address although pid unresolved — reusing existing daemon")
+                savePid(port, existingPid)
+                cachedPid = existingPid
+                return true
+            }
         }
 
         clearSavedPid()
