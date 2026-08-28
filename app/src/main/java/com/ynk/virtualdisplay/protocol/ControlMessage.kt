@@ -13,6 +13,7 @@ sealed class ControlMessage {
         val height: Int,
         val dpi: Int,
         val flags: Int,
+        // Fixed explicit field: always serialized (default -1 means "allocate new").
         val displayId: Int = -1
     ) : ControlMessage() {
         override val type: Int = TYPE_CREATE_VIRTUAL_DISPLAY
@@ -111,11 +112,12 @@ sealed class ControlMessage {
      * ROLE_CONTROL socket 之前必须先发送此消息。服务端据此进入 CONFIGURED 阶段，
      * 否则所有 role socket 会在等待 2s 后被拒绝。
      *
-     * 线格式 (紧跟 1 字节 type + 8 字节 sequence 之后):
+     * 线格式 (紧跟 1 字节 type + 8 字节 sequence 之后) — 固定显式布局，服务端不做
+     * EOF 探测，所有字段必须完整发送：
      *   int32 optionsKv_len + optionsKv_bytes (UTF-8, 按行分隔的 key=value 覆写)
      *   int32 rolesMask (旧版 3-bit 掩码；0 表示允许任意 role 类型)
      *   int32 entriesCount
-     *   entriesCount × (uint8 role + int32 displayId)  —— 可选 role/display 显式声明
+     *   entriesCount × (uint8 role + int32 displayId)
      *
      * 默认空 options + rolesMask=0 + entriesCount=0 允许任意 (role, displayId) 组合。
      */
