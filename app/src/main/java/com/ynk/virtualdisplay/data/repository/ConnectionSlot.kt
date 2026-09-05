@@ -99,6 +99,8 @@ class ConnectionSlot(
     override fun unbindService() = lifecycle.unbindService()
     override suspend fun startDaemon(): Result<Unit> = lifecycle.startDaemon()
     override suspend fun stopDaemon(): Result<Unit> = lifecycle.stopDaemon()
+    override suspend fun connect(): Result<Unit> = lifecycle.connect()
+    override suspend fun disconnect(): Result<Unit> = lifecycle.disconnect()
     override fun destroyService() = lifecycle.destroyService()
 
     // ====================== 显示器操作（基于资源容器的原语） ======================
@@ -232,40 +234,42 @@ class ConnectionSlot(
         // ----- daemon 进程原语 -----
 
         /**
-         * 拉起本机 daemon（仅"本机 + 有特权模式"节点才需要）。
-         * 特权预检已收敛在 [DaemonProcessDataSource.startDaemon] 内部（唯一的特权检查点），
-         * 这里只负责按是否为"本机拉起型节点"来决定是否启动，不再重复做权限检查。
-         *
-         * @return true 表示可继续连接；false 表示"自动启动服务端"被关闭且 daemon 未运行，应静默跳过。
-         * @throws [PrivilegeException] 拉起失败。
+         * 连接/拉起目标快照：本机节点在调用时一次性读取监听配置（serverHost/serverPort/serverPassword），
+         * 远程节点使用节点自身配置。快照仅在建立连接 / 拉起进程时读取一次，
+         * 连接存续期间修改监听配置不影响当前连接，也不会触发重连。
          */
-        suspend fun ensureDaemonRunning(
-            host: String, port: Int, password: String,
-            privilegeMode: PrivilegeMode, enforceAutoStart: Boolean
-        ): Boolean {
-            val proc = processDataSource
-            if (node.isLocal && proc != null && privilegeMode != PrivilegeMode.NONE) {
-                if (enforceAutoStart) {
-                    val autoStart = settingsDataSource.getAutoStartServerSync()
-                    val isRunning = withContext(Dispatchers.IO) { proc.getDaemonPid() > 0 }
-                    if (!autoStart && !isRunning) {
-                        _connectionStatus.value = ConnectionStatus.DISCONNECTED
-                        return false
-                    }
-                }
-                val started = withContext(Dispatchers.IO) {
-                    proc.startDaemon(port, node.host, password)
-                }
-                if (!started) throw PrivilegeException("启动服务端进程失败")
-                _daemonPid.value = withContext(Dispatchers.IO) { proc.getDaemonPid() }
+        suspend fun snapshotConnectTarget(): Triple<String, Int, String> =
+            if (node.isLocal) {
+                Triple(
+                    NetUtils.resolveConnectHost(settingsDataSource.getServerHost()),
+                    settingsDataSource.getServerPort(),
+                    settingsDataSource.getServerPassword()
+                )
             } else {
-                _daemonPid.value = -1
+                Triple(NetUtils.resolveConnectHost(node.host), node.port, node.password)
             }
-            return true
+
+        /**
+         * 拉起本机 daemon。全应用唯一拉起入口（设置页"启动"），不在任何连接流程内自动触发。
+         * 特权预检已收敛在 [DaemonProcessDataSource.startDaemon] 内部（唯一的特权检查点）。
+         *
+         * @throws [PrivilegeException] 拉起失败；[IllegalStateException] 当前节点不支持本地拉起。
+         */
+        suspend fun startDaemonProcess() {
+            val proc = processDataSource
+                ?: throw IllegalStateException("当前环境未提供进程数据源，无法拉起本机 daemon")
+            val privilegeMode = settingsDataSource.getPrivilegeModeSync()
+            if (!node.isLocal || privilegeMode == PrivilegeMode.NONE) {
+                throw IllegalStateException("当前节点（${node.name}）不支持本地拉起 daemon")
+            }
+            val (host, port, password) = snapshotConnectTarget()
+            val started = withContext(Dispatchers.IO) { proc.startDaemon(port, host, password) }
+            if (!started) throw PrivilegeException("启动服务端进程失败")
+            _daemonPid.value = withContext(Dispatchers.IO) { proc.getDaemonPid() }
         }
 
         /**
-         * 重连前确保 daemon 存活：缓存 PID 无效或端口未监听时重启 daemon。
+         * 重连前确保 daemon 存活：缓存 PID 无效或目标端口未监听时按监听配置重启 daemon。
          * 仅在"本机 + 有特权模式"节点生效，远程节点直接视为就绪。
          *
          * @return true 表示 daemon 就绪可继续重连；false 表示拉起失败，应退避后重试。
@@ -285,7 +289,7 @@ class ConnectionSlot(
                 if (cachedPid <= 0 || !daemonListening) {
                     Log.i(TAG, "[${node.uniqueKey()}] Daemon not alive, restarting...")
                     val started = runCatching {
-                        proc.startDaemon(port, node.host, password)
+                        proc.startDaemon(port, host, password)
                     }.getOrDefault(false)
                     if (!started) return false
                     _daemonPid.value = proc.getDaemonPid()
@@ -484,7 +488,7 @@ class ConnectionSlot(
         fun bindService() {
             if (res.isBound) return
             scope.launch {
-                connectInternal(enforceAutoStart = true)
+                connectInternal()
             }
         }
 
@@ -495,36 +499,21 @@ class ConnectionSlot(
         }
 
         /**
-         * 启动并建立服务端连接的核心流程。
+         * 建立服务端连接的核心流程（纯连接，不拉起 daemon——拉起唯一入口是设置页"启动"）。
          *
-         * 划分为三个清晰步骤（均委托资源容器原语，不再"一锅烩"）：
-         * 1. 拉起 daemon（仅本机特权节点）；
-         * 2. 建立 transport 连接；
-         * 3. 标记连接成功并刷新显示 / 或标记失败并进入后台自动重连。
+         * 连接目标在进入本流程时通过 [SlotResources.snapshotConnectTarget] 读取一次并快照，
+         * 连接存续期间修改监听配置不影响当前连接，也不会触发重连。
          *
-         * @param enforceAutoStart 仅自动启动入口为 true：受 "自动启动服务端" 开关约束，
-         * 关闭且 daemon 未运行时静默跳过。手动启动（[startDaemon]）传 false，强制拉起
-         * daemon 并连接，不受开关影响。
-         * @return 启动+连接结果，失败时 [Result.failure] 携带用户可读的中文错误。
+         * 成功则标记连接并刷新显示；失败则进入后台自动重连自愈。
+         * @return 连接结果，失败时 [Result.failure] 携带用户可读的中文错误。
          */
-        private suspend fun connectInternal(enforceAutoStart: Boolean): Result<Unit> {
+        private suspend fun connectInternal(): Result<Unit> {
             res.setStatus(ConnectionStatus.BINDING)
-            val host = if (node.host == "0.0.0.0") "127.0.0.1" else node.host
-            val port = node.port
-            val password = node.password
-            val privilegeMode = settingsDataSource.getPrivilegeModeSync()
+            val (host, port, password) = res.snapshotConnectTarget()
 
             try {
-                // 步骤 1：拉起 daemon；返回 false 表示应静默跳过（自动启动被关闭且 daemon 未运行）
-                if (!res.ensureDaemonRunning(host, port, password, privilegeMode, enforceAutoStart)) {
-                    res.setStatus(ConnectionStatus.DISCONNECTED)
-                    return Result.success(Unit)
-                }
-
-                // 步骤 2：建立 transport 连接
                 val connected = res.connectTransport(host, port, password)
 
-                // 步骤 3：成功则标记连接并刷新显示；失败则进入后台自动重连自愈
                 if (connected) {
                     res.markConnected(scope)
                     res.refreshManagedDisplays()
@@ -552,9 +541,7 @@ class ConnectionSlot(
                 val existing = reconnectJob
                 if (existing != null && existing.isActive) return
                 reconnectJob = scope.launch(Dispatchers.IO) {
-                    val host = NetUtils.resolveConnectHost(node.host)
-                    val port = node.port
-                    val password = node.password
+                    val (host, port, password) = res.snapshotConnectTarget()
 
                     var attempt = 0
                     val baseDelayMs = 200L
@@ -624,17 +611,17 @@ class ConnectionSlot(
             res.resetConnectionState()
         }
 
+        /**
+         * 仅拉起本机 daemon 进程，不建立连接。全应用唯一拉起入口（设置页"启动"）。
+         */
         suspend fun startDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
-            if (res.connectionStatus.value == ConnectionStatus.CONNECTED) return@withContext Result.success(Unit)
-            if (res.isBound) {
-                val job = withContext(Dispatchers.Main) {
-                    res.updateBound(false)
-                    launchCleanupOnce(killDaemon = false)
-                }
-                withTimeoutOrNull(1000) { job.join() }
+            try {
+                res.startDaemonProcess()
+                Result.success(Unit)
+            } catch (e: Exception) {
+                Log.e(TAG, "[${node.uniqueKey()}] startDaemon (launch only) failed", e)
+                Result.failure(e)
             }
-            // 手动启动强制拉起 daemon 并连接，不受 "自动启动服务端" 开关约束。
-            connectInternal(enforceAutoStart = false)
         }
 
         suspend fun stopDaemon(): Result<Unit> = withContext(Dispatchers.IO) {
@@ -642,6 +629,32 @@ class ConnectionSlot(
                 val job = withContext(Dispatchers.Main) {
                     res.updateBound(false)
                     launchCleanupOnce(killDaemon = true)
+                }
+                withTimeoutOrNull(3000) { job.join() }
+            }.map { }
+        }
+
+        /** 仅建立 transport 连接（不拉起 daemon 进程）。 */
+        suspend fun connect(): Result<Unit> = withContext(Dispatchers.IO) {
+            if (res.connectionStatus.value == ConnectionStatus.CONNECTED) {
+                return@withContext Result.success(Unit)
+            }
+            if (res.isBound) {
+                val job = withContext(Dispatchers.Main) {
+                    res.updateBound(false)
+                    launchCleanupOnce(killDaemon = false)
+                }
+                withTimeoutOrNull(1000) { job.join() }
+            }
+            connectInternal()
+        }
+
+        /** 仅断开连接（不停止 daemon 进程）。 */
+        suspend fun disconnect(): Result<Unit> = withContext(Dispatchers.IO) {
+            runCatching {
+                val job = withContext(Dispatchers.Main) {
+                    res.updateBound(false)
+                    launchCleanupOnce(killDaemon = false)
                 }
                 withTimeoutOrNull(3000) { job.join() }
             }.map { }

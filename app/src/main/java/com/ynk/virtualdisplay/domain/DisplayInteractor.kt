@@ -98,14 +98,15 @@ class DisplayInteractor(
         val stopped = repository.stopDaemon()
         if (stopped.isFailure) return stopped
         delay(500)
-        return startDaemon()
+        return repository.startDaemon().fold(
+            onSuccess = { repository.connect() },
+            onFailure = { Result.failure(it) }
+        )
     }
 
     /**
-     * 启动服务端进程并建立连接（手动启动入口）。
-     *
-     * 权限（SHIZUKU / ROOT）预检统一收敛在数据层汇聚点
-     * [com.ynk.virtualdisplay.data.repository.ConnectionSlot.connectInternal]，
+     * 启动服务端进程（手动启动入口，仅拉起进程不建立连接）。
+     * 权限（SHIZUKU / ROOT）预检统一收敛在数据层汇聚点负责，
      * 未授权时会抛出 [PrivilegeException] 并由其转为 [Result.failure]，供 ViewModel 提示用户。
      */
     suspend fun startDaemon(): Result<Unit> = repository.startDaemon()
@@ -120,6 +121,12 @@ class DisplayInteractor(
     suspend fun stopDaemon(): Result<Unit> {
         return repository.stopDaemon()
     }
+
+    /** 仅建立连接（不拉起 daemon 进程，透传 [IDisplayRepository.connect]）。 */
+    suspend fun connect(): Result<Unit> = repository.connect()
+
+    /** 仅断开连接（不停止 daemon 进程，透传 [IDisplayRepository.disconnect]）。 */
+    suspend fun disconnect(): Result<Unit> = repository.disconnect()
 
     // === 显示器操作 ===
 

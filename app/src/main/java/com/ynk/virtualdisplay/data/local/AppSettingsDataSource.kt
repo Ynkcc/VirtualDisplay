@@ -45,9 +45,6 @@ class AppSettingsDataSource(private val context: Context) {
     /** 当前服务器节点（内存缓存） */
     val currentServerNodeCache: StateFlow<ServerNode> = AppSettings.currentServerNodeCache
 
-    /** 是否自动启动服务端（内存缓存） */
-    val autoStartServerCache: StateFlow<Boolean> = AppSettings.autoStartServerCache
-
     /** 是否开启超低延迟（内存缓存） */
     val ultraLowLatencyCache: StateFlow<Boolean> = AppSettings.ultraLowLatencyCache
 
@@ -61,9 +58,6 @@ class AppSettingsDataSource(private val context: Context) {
 
     /** 同步读取当前服务器节点 */
     fun getCurrentServerNodeSync(): ServerNode = AppSettings.getCurrentServerNodeSync()
-
-    /** 同步读取是否自动启动服务端 */
-    fun getAutoStartServerSync(): Boolean = AppSettings.getAutoStartServerSync()
 
     /** 同步读取是否开启超低延迟 */
     fun getUltraLowLatencySync(): Boolean = AppSettings.getUltraLowLatencySync()
@@ -119,19 +113,13 @@ class AppSettingsDataSource(private val context: Context) {
     /** 设置是否捕获返回键 */
     suspend fun setCaptureBack(enabled: Boolean) = AppSettings.setCaptureBack(context, enabled)
 
-    // === 特权模式 / 自动启动（privilegeMode / autoStartServer）===
+    // === 特权模式（privilegeMode）===
 
     /** 监听特权模式 Flow */
     fun privilegeModeFlow(): Flow<PrivilegeMode> = AppSettings.privilegeModeFlow(context)
 
     /** 设置特权模式 */
     suspend fun setPrivilegeMode(mode: PrivilegeMode) = AppSettings.setPrivilegeMode(context, mode)
-
-    /** 监听是否自动启动服务端 Flow */
-    fun autoStartServerFlow(): Flow<Boolean> = AppSettings.autoStartServerFlow(context)
-
-    /** 设置是否自动启动服务端 */
-    suspend fun setAutoStartServer(enabled: Boolean) = AppSettings.setAutoStartServer(context, enabled)
 
     // === 超低延迟（ultraLowLatency）===
 

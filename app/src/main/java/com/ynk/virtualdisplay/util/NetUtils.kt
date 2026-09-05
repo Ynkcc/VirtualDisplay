@@ -1,21 +1,28 @@
 package com.ynk.virtualdisplay.util
 
+import android.util.Log
 import java.net.*
 
-/** 网络相关工具：地址常量、错误信息映射与 TCP 连通性测试。 */
 object NetUtils {
-    /** 本地环路地址。 */
+    private const val TAG = "NetUtils"
+
     const val LOCAL_HOST = "127.0.0.1"
-
-    /** 任意地址（监听所有网卡）标识。 */
     const val ANY_HOST = "0.0.0.0"
+    const val IPV6_ANY = "::"
+    const val IPV6_LOOPBACK = "::1"
 
-    /**
-     * 将网络异常映射为用户可读的中文提示，按常见错误类型给出排查建议。
-     *
-     * @param t 捕获的网络异常。
-     * @return 友好的中文错误描述。
-     */
+    private val IPV4_REGEX = Regex("^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$")
+    private val HOSTNAME_REGEX = Regex("^([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-]*[a-zA-Z0-9])(\\.[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-]*[a-zA-Z0-9])*$")
+
+    fun getDefaultLoopback(): String {
+        return try {
+            InetAddress.getLoopbackAddress().hostAddress ?: LOCAL_HOST
+        } catch (e: Throwable) {
+            Log.w(TAG, "Failed to get system loopback address, using $LOCAL_HOST", e)
+            LOCAL_HOST
+        }
+    }
+
     fun getFriendlyErrorMessage(t: Throwable): String {
         return when (t) {
             is ConnectException -> {
@@ -33,16 +40,78 @@ object NetUtils {
         }
     }
 
-    /**
-     * 如果为 0.0.0.0 返回本地环路地址，否则返回实际ip
-     */
     fun resolveConnectHost(host: String): String {
-        return if (host == ANY_HOST) LOCAL_HOST else host
+        return when (val trimmed = host.trim()) {
+            ANY_HOST -> LOCAL_HOST
+            IPV6_ANY -> IPV6_LOOPBACK
+            else -> trimmed
+        }
     }
 
-    /**
-     * 测试 host:port 是否能建立 TCP 连接（需在 IO 线程调用）
-     */
+    fun isLocalHost(host: String): Boolean {
+        val trimmed = host.trim()
+        val defaultLoopback = getDefaultLoopback()
+        return trimmed == LOCAL_HOST ||
+                trimmed == IPV6_LOOPBACK ||
+                trimmed == "localhost" ||
+                trimmed == ANY_HOST ||
+                trimmed == IPV6_ANY ||
+                trimmed.equals(defaultLoopback, ignoreCase = true)
+    }
+
+    fun isValidHostFormat(host: String): Boolean {
+        val trimmed = host.trim()
+        if (trimmed.isEmpty()) return false
+        if (trimmed == IPV6_ANY || trimmed == IPV6_LOOPBACK) return true
+        if (IPV4_REGEX.matches(trimmed)) return true
+        if (isValidIpv6Format(trimmed)) return true
+        if (HOSTNAME_REGEX.matches(trimmed)) return true
+        return false
+    }
+
+    private fun isValidIpv6Format(ip: String): Boolean {
+        if (!ip.contains(':')) return false
+        if (ip.count { it == ':' } < 2) return false
+        val doubleColonIndex = ip.indexOf("::")
+        if (doubleColonIndex != -1 && ip.indexOf("::", doubleColonIndex + 2) != -1) {
+            return false
+        }
+        val parts = ip.split(":")
+        if (doubleColonIndex == -1 && parts.size != 8) {
+            return false
+        }
+        for (part in parts) {
+            if (part.length > 4) return false
+            if (part.isNotEmpty() && !part.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) {
+                return false
+            }
+        }
+        return true
+    }
+
+    fun getAvailableNetworkAddresses(): List<Pair<String, String>> {
+        val list = mutableListOf<Pair<String, String>>()
+        list.add("本机环回 (${getDefaultLoopback()})" to getDefaultLoopback())
+        list.add("双栈全部接口 (IPv4 + IPv6: ::)" to IPV6_ANY)
+        list.add("IPv4 全部接口 (0.0.0.0)" to ANY_HOST)
+
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return list
+            for (intf in interfaces) {
+                if (intf.isLoopback || !intf.isUp) continue
+                for (addr in intf.inetAddresses) {
+                    val hostAddress = addr.hostAddress ?: continue
+                    val cleanAddress = hostAddress.substringBefore('%')
+                    val label = "${intf.displayName ?: intf.name} ($cleanAddress)"
+                    list.add(label to cleanAddress)
+                }
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to get network interfaces", e)
+        }
+        return list
+    }
+
     fun testConnection(host: String, port: Int, timeoutMs: Int = 3000): Result<Unit> {
         return try {
             Socket().use { s ->

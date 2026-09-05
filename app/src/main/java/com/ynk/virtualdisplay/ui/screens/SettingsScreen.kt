@@ -63,17 +63,11 @@ fun SettingsScreen(
 
     var flagsExpanded by remember { mutableStateOf(false) }
     var portText by remember { mutableStateOf(serverPort.toString()) }
-    var hostText by remember { mutableStateOf(serverHost) }
     var passwordText by remember { mutableStateOf(serverPassword) }
 
     LaunchedEffect(serverPort) {
         if (portText != serverPort.toString()) {
             portText = serverPort.toString()
-        }
-    }
-    LaunchedEffect(serverHost) {
-        if (hostText != serverHost) {
-            hostText = serverHost
         }
     }
     LaunchedEffect(serverPassword) {
@@ -173,12 +167,12 @@ fun SettingsScreen(
 
         var gesturesExpanded by remember { mutableStateOf(false) }
         var serverStartExpanded by remember { mutableStateOf(false) }
-        val autoStartServer by AppSettings.autoStartServerFlow(context).collectAsState(initial = true)
-        val localIps by produceState<List<String>>(initialValue = emptyList()) {
+        val bindAddresses by produceState<List<Pair<String, String>>>(initialValue = emptyList()) {
             value = withContext(Dispatchers.IO) {
-                getLocalIpAddresses()
+                NetUtils.getAvailableNetworkAddresses()
             }
         }
+        var hostMenuExpanded by remember { mutableStateOf(false) }
 
         Card(
             shape = RoundedCornerShape(16.dp),
@@ -395,19 +389,46 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
 
-                        OutlinedTextField(
-                            value = hostText,
-                            onValueChange = { newValue ->
-                                hostText = newValue
-                                scope.launch {
-                                    AppSettings.setServerHost(context, newValue)
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = serverHost,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Daemon 监听地址") },
+                                trailingIcon = {
+                                    Text(
+                                        text = if (hostMenuExpanded) "▲" else "▼",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { hostMenuExpanded = true }
+                            )
+                            DropdownMenu(
+                                expanded = hostMenuExpanded,
+                                onDismissRequest = { hostMenuExpanded = false },
+                                modifier = Modifier.fillMaxWidth(0.9f)
+                            ) {
+                                bindAddresses.forEach { (label, value) ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = label,
+                                                fontWeight = if (value == serverHost) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        },
+                                        onClick = {
+                                            hostMenuExpanded = false
+                                            scope.launch {
+                                                AppSettings.setServerHost(context, value)
+                                            }
+                                        }
+                                    )
                                 }
-                            },
-                            label = { Text("监听地址") },
-                            placeholder = { Text(NetUtils.LOCAL_HOST) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                            }
+                        }
 
                         OutlinedTextField(
                             value = portText,
@@ -444,46 +465,12 @@ fun SettingsScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
 
-                        SettingSwitchRow(
-                            title = "自动启动服务端",
-                            description = "应用启动或切换至本机节点时，自动在后台拉起特权服务端守护进程",
-                            checked = autoStartServer,
-                            onCheckedChange = { isChecked ->
-                                scope.launch {
-                                    AppSettings.setAutoStartServer(context, isChecked)
-                                }
-                            }
+                        Text(
+                            text = "提示：拉起服务端仅通过上方「启动」按钮执行；连接参数在建立连接时读取一次，连接存续期间修改监听配置不影响当前连接。",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            lineHeight = 15.sp
                         )
-
-                        val addressItems = remember(serverHost, localIps) {
-                            val list = mutableListOf<String>()
-                            if (serverHost == NetUtils.ANY_HOST) {
-                                list.addAll(localIps)
-                            } else {
-                                list.add(serverHost)
-                            }
-                            if (!list.contains(NetUtils.LOCAL_HOST)) {
-                                list.add(NetUtils.LOCAL_HOST)
-                            }
-                            list
-                        }
-
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                text = "监听地址",
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            addressItems.forEach { addr ->
-                                Text(
-                                    text = addr,
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -635,27 +622,4 @@ private fun SystemInfoRow(label: String, value: String) {
             fontWeight = FontWeight.Medium
         )
     }
-}
-
-private fun getLocalIpAddresses(): List<String> {
-    val ipList = mutableListOf<String>()
-    try {
-        val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-        while (interfaces.hasMoreElements()) {
-            val networkInterface = interfaces.nextElement()
-            if (networkInterface.isLoopback || !networkInterface.isUp || networkInterface.isVirtual) continue
-            val addresses = networkInterface.inetAddresses
-            while (addresses.hasMoreElements()) {
-                val address = addresses.nextElement()
-                if (address is java.net.Inet4Address) {
-                    address.hostAddress?.let { ip ->
-                        ipList.add("${networkInterface.name} ($ip)")
-                    }
-                }
-            }
-        }
-    } catch (e: Exception) {
-        // ignore
-    }
-    return ipList
 }

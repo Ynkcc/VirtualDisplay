@@ -156,6 +156,8 @@ class MainViewModel(
             is MainIntent.CheckRootPermission -> checkRootPermission()
             is MainIntent.StartServer -> startServer()
             is MainIntent.StopServer -> stopServer()
+            is MainIntent.ConnectServer -> connectServer()
+            is MainIntent.DisconnectServer -> disconnectServer()
         }
     }
 
@@ -163,8 +165,7 @@ class MainViewModel(
 
     private fun initializeAndBind() {
         checkAndInitDeviceMetrics()
-        // 特权预检仅发生在数据层真正拉起本机 daemon 时（DaemonProcessDataSource.startDaemon），
-        // 这里只负责初始化并建立连接，不做任何特权检查；失败经 connectionError/statusMessage 反馈。
+        // 仅建立连接：拉起 daemon 的唯一入口是设置页"启动"，连接流程不自动拉起进程。
         interactor.bindService()
     }
 
@@ -206,9 +207,6 @@ class MainViewModel(
     private fun updatePrivilegeMode(mode: PrivilegeMode) {
         viewModelScope.launch {
             settingsDataSource.setPrivilegeMode(mode)
-            interactor.unbindService()
-            delay(300)
-            initializeAndBind()
         }
     }
 
@@ -394,14 +392,35 @@ class MainViewModel(
 
     private fun startServer() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "正在启动服务端...") }
+            _uiState.update { it.copy(isLoading = true, statusMessage = "正在拉起本地服务端...") }
             interactor.startDaemon()
                 .onSuccess {
-                    _uiState.update { it.copy(isLoading = false, statusMessage = "服务端启动成功") }
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "本地服务端已拉起（未连接）") }
                 }
                 .onFailure { e ->
-                    _uiState.update { it.copy(isLoading = false, statusMessage = "启动失败: ${e.message}") }
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "拉起失败: ${e.message}") }
                 }
+        }
+    }
+
+    private fun connectServer() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, statusMessage = "正在连接服务端...") }
+            interactor.connect()
+                .onSuccess {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "连接请求已发起") }
+                }
+                .onFailure { e ->
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "连接失败: ${e.message}") }
+                }
+        }
+    }
+
+    private fun disconnectServer() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, statusMessage = "正在断开连接...") }
+            interactor.disconnect()
+            _uiState.update { it.copy(isLoading = false, statusMessage = "已断开连接") }
         }
     }
 

@@ -59,11 +59,17 @@ interface IDisplayRepository {
     /** 解绑服务 */
     fun unbindService()
 
-    /** 强制启动守护进程并连接 */
+    /** 强制拉起本机守护进程（仅拉起进程，不建立连接） */
     suspend fun startDaemon(): Result<Unit>
 
     /** 强制停止守护进程并解绑 */
     suspend fun stopDaemon(): Result<Unit>
+
+    /** 仅建立 transport 连接（不拉起 daemon 进程） */
+    suspend fun connect(): Result<Unit>
+
+    /** 仅断开连接（不停止 daemon 进程） */
+    suspend fun disconnect(): Result<Unit>
 
     /** 创建虚拟显示器 */
     suspend fun createDisplay(name: String, width: Int, height: Int, dpi: Int, flags: Int = 0, mirrorDisplayId: Int = -1): Result<Int>

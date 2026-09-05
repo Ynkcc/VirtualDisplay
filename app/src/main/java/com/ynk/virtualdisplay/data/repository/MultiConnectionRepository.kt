@@ -122,6 +122,8 @@ class MultiConnectionRepository(
     override fun unbindService() { activeSlot?.unbindService() }
     override suspend fun startDaemon(): Result<Unit> = activeSlot?.startDaemon() ?: Result.failure(noActiveSlotError())
     override suspend fun stopDaemon(): Result<Unit> = activeSlot?.stopDaemon() ?: Result.failure(noActiveSlotError())
+    override suspend fun connect(): Result<Unit> = activeSlot?.connect() ?: Result.failure(noActiveSlotError())
+    override suspend fun disconnect(): Result<Unit> = activeSlot?.disconnect() ?: Result.failure(noActiveSlotError())
     override fun destroyService() {
         _slots.value.values.forEach { it.destroyService() }
         _slots.update { emptyMap() }

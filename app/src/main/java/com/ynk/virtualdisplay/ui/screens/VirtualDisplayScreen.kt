@@ -43,18 +43,9 @@ import com.ynk.virtualdisplay.ui.main.MainIntent
 import com.ynk.virtualdisplay.ui.main.MainViewModel
 import com.ynk.virtualdisplay.ui.components.DisplayItem
 import com.ynk.virtualdisplay.ui.components.AppSelectionDialog
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+
 
 private data class DisplayPreset(val name: String, val width: Int, val height: Int, val dpi: Int)
-
-private sealed interface ConnectionTestState {
-    data object Idle : ConnectionTestState
-    data object Testing : ConnectionTestState
-    data object Success : ConnectionTestState
-    data class Fail(val message: String) : ConnectionTestState
-}
 
 @Composable
 fun VirtualDisplayScreen(
@@ -136,22 +127,29 @@ fun VirtualDisplayScreen(
                 )
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    val isLocalPrivileged = uiState.currentServerNode.isLocal &&
-                        uiState.privilegeMode != com.ynk.virtualdisplay.data.PrivilegeMode.NONE
-                    if (!isLocalPrivileged) {
-                        val isBinding = uiState.connectionStatus == com.ynk.virtualdisplay.data.repository.ConnectionStatus.BINDING
-                        TextButton(
-                            onClick = { viewModel.handleIntent(MainIntent.Reconnect) },
-                            enabled = !isBinding,
-                            colors = ButtonDefaults.textButtonColors(
-                                contentColor = MaterialTheme.colorScheme.primary
+                    val isBinding = uiState.connectionStatus == com.ynk.virtualdisplay.data.repository.ConnectionStatus.BINDING
+                    val isConnected = uiState.connectionStatus == com.ynk.virtualdisplay.data.repository.ConnectionStatus.CONNECTED ||
+                        uiState.connectionStatus == com.ynk.virtualdisplay.data.repository.ConnectionStatus.RECONNECTING
+                    TextButton(
+                        onClick = {
+                            viewModel.handleIntent(
+                                if (isConnected) MainIntent.DisconnectServer else MainIntent.ConnectServer
                             )
-                        ) {
-                            Text(
-                                text = if (isBinding) "连接中…" else "重连",
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                        },
+                        enabled = !isBinding,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = if (isConnected) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Text(
+                            text = when {
+                                isBinding -> "连接中…"
+                                isConnected -> "断开"
+                                else -> "连接"
+                            },
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                     IconButton(
                         onClick = { viewModel.handleIntent(MainIntent.RefreshDisplays) },
@@ -224,7 +222,6 @@ fun VirtualDisplayScreen(
                         onDismissRequest = { dropdownExpanded = false }
                     ) {
                         uiState.serverNodes.forEach { node ->
-                            val isLocalNode = node.host == NetUtils.LOCAL_HOST || node.host == "localhost" || node.name == "本机"
                             DropdownMenuItem(
                                 text = {
                                     Row(
@@ -237,35 +234,33 @@ fun VirtualDisplayScreen(
                                             Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                                             Spacer(modifier = Modifier.width(8.dp))
                                         }
-                                        if (!isLocalNode) {
-                                            IconButton(
-                                                onClick = {
-                                                    dropdownExpanded = false
-                                                    editingNode = node
-                                                },
-                                                modifier = Modifier.size(24.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Edit,
-                                                    contentDescription = "编辑设备",
-                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                            IconButton(
-                                                onClick = {
-                                                    dropdownExpanded = false
-                                                    viewModel.handleIntent(MainIntent.RemoveServerNode(node))
-                                                },
-                                                modifier = Modifier.size(24.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Delete,
-                                                    contentDescription = "删除设备",
-                                                    tint = MaterialTheme.colorScheme.error,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
+                                        IconButton(
+                                            onClick = {
+                                                dropdownExpanded = false
+                                                editingNode = node
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Edit,
+                                                contentDescription = "编辑设备",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                dropdownExpanded = false
+                                                viewModel.handleIntent(MainIntent.RemoveServerNode(node))
+                                            },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "删除设备",
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(16.dp)
+                                            )
                                         }
                                     }
                                 },
@@ -291,29 +286,9 @@ fun VirtualDisplayScreen(
                     var addHost by remember { mutableStateOf("") }
                     var addPort by remember { mutableStateOf("27183") }
                     var addPassword by remember { mutableStateOf("") }
-                    var testState by remember { mutableStateOf<ConnectionTestState>(ConnectionTestState.Idle) }
-                    val testScope = rememberCoroutineScope()
-
-                    fun runConnectionTest() {
-                        if (addHost.isBlank()) {
-                            testState = ConnectionTestState.Fail("请先填写设备 IP")
-                            return
-                        }
-                        val portNum = addPort.toIntOrNull() ?: 27183
-                        testState = ConnectionTestState.Testing
-                        testScope.launch {
-                            val result = withContext(Dispatchers.IO) {
-                                NetUtils.testConnection(addHost, portNum)
-                            }
-                            testState = if (result.isSuccess) {
-                                ConnectionTestState.Success
-                            } else {
-                                ConnectionTestState.Fail(
-                                    NetUtils.getFriendlyErrorMessage(result.exceptionOrNull() ?: RuntimeException("未知连接错误"))
-                                )
-                            }
-                        }
-                    }
+                    val addHostValid = NetUtils.isValidHostFormat(addHost.trim())
+                    val addPortValid = (addPort.toIntOrNull() ?: 27183) in 1024..65535
+                    val canAdd = addName.isNotBlank() && addHostValid && addPortValid
 
                     AlertDialog(
                         onDismissRequest = { showAddDialog = false },
@@ -329,22 +304,24 @@ fun VirtualDisplayScreen(
                                 )
                                 OutlinedTextField(
                                     value = addHost,
-                                    onValueChange = {
-                                        addHost = it
-                                        testState = ConnectionTestState.Idle
-                                    },
-                                    label = { Text("设备 IP") },
+                                    onValueChange = { addHost = it },
+                                    label = { Text("设备 IP / 主机名") },
                                     placeholder = { Text("192.168.1.100") },
+                                    isError = addHost.isNotBlank() && !addHostValid,
+                                    supportingText = if (addHost.isNotBlank() && !addHostValid) {
+                                        { Text("IP 或主机名格式无效", fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
+                                    } else null,
                                     singleLine = true
                                 )
                                 OutlinedTextField(
                                     value = addPort,
-                                    onValueChange = {
-                                        addPort = it.filter { c -> c.isDigit() }
-                                        testState = ConnectionTestState.Idle
-                                    },
-                                    label = { Text("设备端口") },
+                                    onValueChange = { addPort = it.filter { c -> c.isDigit() } },
+                                    label = { Text("设备端口 (1024-65535)") },
                                     placeholder = { Text("27183") },
+                                    isError = addPort.isNotBlank() && !addPortValid,
+                                    supportingText = if (addPort.isNotBlank() && !addPortValid) {
+                                        { Text("端口需在 1024-65535 范围内", fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
+                                    } else null,
                                     singleLine = true
                                 )
                                 OutlinedTextField(
@@ -353,43 +330,20 @@ fun VirtualDisplayScreen(
                                     label = { Text("连接密码 (可选)") },
                                     singleLine = true
                                 )
-                                OutlinedButton(
-                                    onClick = { runConnectionTest() },
-                                    enabled = testState != ConnectionTestState.Testing,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    when (testState) {
-                                        ConnectionTestState.Testing -> Text("正在测试连接...")
-                                        ConnectionTestState.Success -> Text("测试连接 ✓")
-                                        else -> Text("测试连接")
-                                    }
-                                }
-                                when (val state = testState) {
-                                    is ConnectionTestState.Fail -> Text(
-                                        text = state.message,
-                                        fontSize = 12.sp,
-                                        color = MaterialTheme.colorScheme.error
-                                    )
-                                    ConnectionTestState.Success -> Text(
-                                        text = "连接成功",
-                                        fontSize = 12.sp,
-                                        color = Color(0xFF26A69A)
-                                    )
-                                    else -> {}
-                                }
                             }
                         },
                         confirmButton = {
                             Button(
                                 onClick = {
-                                    val portNum = addPort.toIntOrNull() ?: 27183
-                                    if (addName.isNotEmpty() && addHost.isNotEmpty()) {
-                                        val newNode = com.ynk.virtualdisplay.data.ServerNode(addName, addHost, portNum, addPassword)
+                                    if (canAdd) {
+                                        val portNum = addPort.toIntOrNull() ?: 27183
+                                        val newNode = com.ynk.virtualdisplay.data.ServerNode(addName.trim(), addHost.trim(), portNum, addPassword)
                                         viewModel.handleIntent(MainIntent.AddServerNode(newNode))
                                         viewModel.handleIntent(MainIntent.SelectServerNode(newNode))
                                         showAddDialog = false
                                     }
-                                }
+                                },
+                                enabled = canAdd
                             ) {
                                 Text("添加并切换")
                             }
@@ -407,6 +361,9 @@ fun VirtualDisplayScreen(
                     var editHost by remember(node) { mutableStateOf(node.host) }
                     var editPort by remember(node) { mutableStateOf(node.port.toString()) }
                     var editPassword by remember(node) { mutableStateOf(node.password) }
+                    val editHostValid = NetUtils.isValidHostFormat(editHost.trim())
+                    val editPortValid = (editPort.toIntOrNull() ?: 27183) in 1024..65535
+                    val canSave = editName.isNotBlank() && editHostValid && editPortValid
 
                     AlertDialog(
                         onDismissRequest = { editingNode = null },
@@ -423,15 +380,23 @@ fun VirtualDisplayScreen(
                                 OutlinedTextField(
                                     value = editHost,
                                     onValueChange = { editHost = it },
-                                    label = { Text("设备 IP") },
+                                    label = { Text("设备 IP / 主机名") },
                                     placeholder = { Text("192.168.1.100") },
+                                    isError = editHost.isNotBlank() && !editHostValid,
+                                    supportingText = if (editHost.isNotBlank() && !editHostValid) {
+                                        { Text("IP 或主机名格式无效", fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
+                                    } else null,
                                     singleLine = true
                                 )
                                 OutlinedTextField(
                                     value = editPort,
                                     onValueChange = { editPort = it.filter { c -> c.isDigit() } },
-                                    label = { Text("设备端口") },
+                                    label = { Text("设备端口 (1024-65535)") },
                                     placeholder = { Text("27183") },
+                                    isError = editPort.isNotBlank() && !editPortValid,
+                                    supportingText = if (editPort.isNotBlank() && !editPortValid) {
+                                        { Text("端口需在 1024-65535 范围内", fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
+                                    } else null,
                                     singleLine = true
                                 )
                                 OutlinedTextField(
@@ -445,13 +410,14 @@ fun VirtualDisplayScreen(
                         confirmButton = {
                             Button(
                                 onClick = {
-                                    val portNum = editPort.toIntOrNull() ?: 27183
-                                    if (editName.isNotEmpty() && editHost.isNotEmpty()) {
-                                        val newNode = com.ynk.virtualdisplay.data.ServerNode(editName, editHost, portNum, editPassword)
+                                    if (canSave) {
+                                        val portNum = editPort.toIntOrNull() ?: 27183
+                                        val newNode = com.ynk.virtualdisplay.data.ServerNode(editName.trim(), editHost.trim(), portNum, editPassword)
                                         viewModel.handleIntent(MainIntent.EditServerNode(node, newNode))
                                         editingNode = null
                                     }
-                                }
+                                },
+                                enabled = canSave
                             ) {
                                 Text("保存")
                             }

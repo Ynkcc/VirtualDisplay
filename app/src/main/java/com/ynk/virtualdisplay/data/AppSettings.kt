@@ -51,7 +51,7 @@ data class ServerNode(
     val password: String = ""
 ) {
     /** 是否为本机节点（本机节点可启动/停止守护进程） */
-    val isLocal: Boolean get() = host == NetUtils.LOCAL_HOST || host == "localhost" || host == NetUtils.ANY_HOST
+    val isLocal: Boolean get() = NetUtils.isLocalHost(host)
 
     /**
      * 生成节点唯一标识（host 中的 "." 替换为 "_" 并拼接端口），用作 per-node 数据隔离的 key 后缀。
@@ -119,7 +119,6 @@ object AppSettings {
     val serverNodesKey = stringPreferencesKey("server_nodes")
     val currentServerNodeKey = stringPreferencesKey("current_server_node")
     val privilegeModeKey = stringPreferencesKey("privilege_mode")
-    val autoStartServerKey = booleanPreferencesKey("auto_start_server")
     val ultraLowLatencyKey = booleanPreferencesKey("ultra_low_latency")
     val moveTasksOnDestroyKey = booleanPreferencesKey("move_tasks_on_destroy")
 
@@ -134,9 +133,6 @@ object AppSettings {
 
     private val _currentServerNodeCache = MutableStateFlow(ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""))
     val currentServerNodeCache: StateFlow<ServerNode> = _currentServerNodeCache
-
-    private val _autoStartServerCache = MutableStateFlow(true)
-    val autoStartServerCache: StateFlow<Boolean> = _autoStartServerCache
 
     private val _ultraLowLatencyCache = MutableStateFlow(false)
     val ultraLowLatencyCache: StateFlow<Boolean> = _ultraLowLatencyCache
@@ -161,7 +157,6 @@ object AppSettings {
             appContext.dataStore.data.collect { prefs ->
                 _captureBackCache.value = prefs[captureBackKey] ?: false
                 _showPerformanceStatsCache.value = prefs[showPerformanceStatsKey] ?: true
-                _autoStartServerCache.value = prefs[autoStartServerKey] ?: true
                 _ultraLowLatencyCache.value = prefs[ultraLowLatencyKey] ?: false
                 _moveTasksOnDestroyCache.value = prefs[moveTasksOnDestroyKey] ?: true
 
@@ -172,19 +167,12 @@ object AppSettings {
                     PrivilegeMode.SHIZUKU
                 }
 
-                // currentServerNode 仅用于 per-node 数据隔离（flags、显示器存储等）
-                // 实际连接地址/端口如果为“本机”，则从用户配置项（serverHostKey/serverPortKey）读取
-                val host = prefs[serverHostKey] ?: NetUtils.LOCAL_HOST
-                val port = prefs[serverPortKey] ?: 27183
-                val pwd = prefs[serverPasswordKey] ?: ""
-
+                // 当前节点仅来自持久化的节点身份，不与监听配置（serverHost/serverPort）联动：
+                // 连接参数在建立连接时读取一次（快照），连接存续期间修改监听配置不影响当前节点。
                 val nodeStr = prefs[currentServerNodeKey] ?: ""
                 val savedNode = ServerNode.fromSerializedString(nodeStr)
-                _currentServerNodeCache.value = if (savedNode == null || savedNode.name == "本机") {
-                    ServerNode("本机", host, port, pwd)
-                } else {
-                    savedNode
-                }
+                _currentServerNodeCache.value = savedNode
+                    ?: ServerNode("本机", NetUtils.LOCAL_HOST, 27183, "")
             }
         }
     }
@@ -209,13 +197,13 @@ object AppSettings {
     /** 监听地址流（默认本机回环地址）。 */
     fun serverHostFlow(context: Context): Flow<String> {
         return context.applicationContext.dataStore.data.map { prefs ->
-            prefs[serverHostKey] ?: NetUtils.LOCAL_HOST
+            prefs[serverHostKey] ?: NetUtils.getDefaultLoopback()
         }
     }
 
     /** 读取当前监听地址（默认本机回环地址）。 */
     suspend fun getServerHost(context: Context): String {
-        return context.applicationContext.dataStore.data.first()[serverHostKey] ?: NetUtils.LOCAL_HOST
+        return context.applicationContext.dataStore.data.first()[serverHostKey] ?: NetUtils.getDefaultLoopback()
     }
 
     /** 持久化监听地址。 */
@@ -497,26 +485,14 @@ object AppSettings {
     /** 同步读取当前选中的服务器节点（需先调用 [init]）。 */
     fun getCurrentServerNodeSync(): ServerNode = _currentServerNodeCache.value
 
-    /** 服务器节点列表流；始终保证含有一个与本机全局网络配置同步的「本机」节点。 */
+    /** 服务器节点列表流；本机节点与外部设备同构存储，仅在列表为空时提供默认「本机」节点。 */
     fun serverNodesFlow(context: Context): Flow<List<ServerNode>> {
         return context.applicationContext.dataStore.data.map { prefs ->
-            val host = prefs[serverHostKey] ?: NetUtils.LOCAL_HOST
-            val port = prefs[serverPortKey] ?: 27183
-            val pwd = prefs[serverPasswordKey] ?: ""
-            
             val raw = prefs[serverNodesKey] ?: ""
-            val list = if (raw.isEmpty()) {
-                mutableListOf(ServerNode("本机", host, port, pwd))
-            } else {
-                raw.split(",").mapNotNull { ServerNode.fromSerializedString(it) }.toMutableList()
-            }
-            
-            // 始终确保“本机”节点存在且与当前全局网络配置同步
-            val localIdx = list.indexOfFirst { it.name == "本机" }
-            if (localIdx >= 0) {
-                list[localIdx] = list[localIdx].copy(host = host, port = port, password = pwd)
-            } else {
-                list.add(0, ServerNode("本机", host, port, pwd))
+            val list = raw.split(",").filter { it.isNotBlank() }
+                .mapNotNull { ServerNode.fromSerializedString(it) }.toMutableList()
+            if (list.isEmpty()) {
+                list.add(ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""))
             }
             list
         }
@@ -526,15 +502,10 @@ object AppSettings {
     suspend fun getServerNodes(context: Context): List<ServerNode> {
         val prefs = context.applicationContext.dataStore.data.first()
         val raw = prefs[serverNodesKey] ?: ""
-        val list = if (raw.isEmpty()) {
-            mutableListOf(ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""))
-        } else {
-            raw.split(",").mapNotNull { ServerNode.fromSerializedString(it) }.toMutableList()
-        }
-
-        val localIdx = list.indexOfFirst { it.name == "本机" }
-        if (localIdx < 0) {
-            list.add(0, ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""))
+        val list = raw.split(",").filter { it.isNotBlank() }
+            .mapNotNull { ServerNode.fromSerializedString(it) }.toMutableList()
+        if (list.isEmpty()) {
+            list.add(ServerNode("本机", NetUtils.LOCAL_HOST, 27183, ""))
         }
         return list
     }
@@ -589,21 +560,6 @@ object AppSettings {
     /** 持久化特权模式。 */
     suspend fun setPrivilegeMode(context: Context, mode: PrivilegeMode) {
         context.applicationContext.dataStore.edit { it[privilegeModeKey] = mode.name }
-    }
-
-    /** 是否随应用启动自动拉起本地 daemon 的配置流（默认 true）。 */
-    fun autoStartServerFlow(context: Context): Flow<Boolean> {
-        return context.applicationContext.dataStore.data.map { prefs ->
-            prefs[autoStartServerKey] ?: true
-        }
-    }
-
-    /** 同步读取「自动拉起 daemon」配置（需先调用 [init]）。 */
-    fun getAutoStartServerSync(): Boolean = _autoStartServerCache.value
-
-    /** 持久化「自动拉起 daemon」配置。 */
-    suspend fun setAutoStartServer(context: Context, enabled: Boolean) {
-        context.applicationContext.dataStore.edit { it[autoStartServerKey] = enabled }
     }
 
     /** 是否启用超低延迟模式的配置流（默认 false）。 */

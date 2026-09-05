@@ -92,6 +92,10 @@ sealed class MainIntent {
     data object CheckRootPermission : MainIntent()
     data object StartServer : MainIntent()
     data object StopServer : MainIntent()
+    /** 仅建立连接（不拉起 daemon 进程） */
+    data object ConnectServer : MainIntent()
+    /** 仅断开连接（不停止 daemon 进程） */
+    data object DisconnectServer : MainIntent()
 }
 
 /**
