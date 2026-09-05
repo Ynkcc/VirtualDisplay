@@ -108,7 +108,7 @@ class DaemonProcessController(
      * @param password 可选的 daemon_secret_token 认证口令
      * @return true 表示端口已就绪
      */
-    fun startDaemon(port: Int, address: String = NetUtils.getDefaultLoopback(), password: String? = null): Boolean {
+    fun startDaemon(port: Int, address: String = NetUtils.LOCAL_HOST, password: String? = null): Boolean {
         val mode = settingsDataSource.getPrivilegeModeSync()
         if (mode == PrivilegeMode.NONE) {
             Log.i(TAG, "None mode, skipping startDaemon")

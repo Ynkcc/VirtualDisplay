@@ -44,7 +44,11 @@ object NetUtils {
         return when (val trimmed = host.trim()) {
             ANY_HOST -> LOCAL_HOST
             IPV6_ANY -> IPV6_LOOPBACK
-            else -> trimmed
+            else -> if (trimmed.length > 2 && trimmed.startsWith("[") && trimmed.endsWith("]")) {
+                trimmed.substring(1, trimmed.length - 1)
+            } else {
+                trimmed
+            }
         }
     }
 
@@ -62,6 +66,10 @@ object NetUtils {
     fun isValidHostFormat(host: String): Boolean {
         val trimmed = host.trim()
         if (trimmed.isEmpty()) return false
+        // 方括号形式 [2001:db8::1]：剥掉括号后按 IPv6 校验
+        if (trimmed.length > 2 && trimmed.startsWith("[") && trimmed.endsWith("]")) {
+            return isValidHostFormat(trimmed.substring(1, trimmed.length - 1))
+        }
         if (trimmed == IPV6_ANY || trimmed == IPV6_LOOPBACK) return true
         if (IPV4_REGEX.matches(trimmed)) return true
         if (isValidIpv6Format(trimmed)) return true
@@ -80,7 +88,10 @@ object NetUtils {
         if (doubleColonIndex == -1 && parts.size != 8) {
             return false
         }
-        for (part in parts) {
+        for ((index, part) in parts.withIndex()) {
+            if (part.isEmpty()) continue
+            // 允许 IPv4 映射形式（如 ::ffff:192.168.1.1）的末段
+            if (index == parts.lastIndex && IPV4_REGEX.matches(part)) continue
             if (part.length > 4) return false
             if (part.isNotEmpty() && !part.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) {
                 return false
@@ -90,26 +101,10 @@ object NetUtils {
     }
 
     fun getAvailableNetworkAddresses(): List<Pair<String, String>> {
-        val list = mutableListOf<Pair<String, String>>()
-        list.add("本机环回 (${getDefaultLoopback()})" to getDefaultLoopback())
-        list.add("双栈全部接口 (IPv4 + IPv6: ::)" to IPV6_ANY)
-        list.add("IPv4 全部接口 (0.0.0.0)" to ANY_HOST)
-
-        try {
-            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return list
-            for (intf in interfaces) {
-                if (intf.isLoopback || !intf.isUp) continue
-                for (addr in intf.inetAddresses) {
-                    val hostAddress = addr.hostAddress ?: continue
-                    val cleanAddress = hostAddress.substringBefore('%')
-                    val label = "${intf.displayName ?: intf.name} ($cleanAddress)"
-                    list.add(label to cleanAddress)
-                }
-            }
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to get network interfaces", e)
-        }
-        return list
+        return listOf(
+            "仅本机 ($LOCAL_HOST)" to LOCAL_HOST,
+            "全部接口 IPv4+IPv6 ($IPV6_ANY)" to IPV6_ANY
+        )
     }
 
     fun testConnection(host: String, port: Int, timeoutMs: Int = 3000): Result<Unit> {

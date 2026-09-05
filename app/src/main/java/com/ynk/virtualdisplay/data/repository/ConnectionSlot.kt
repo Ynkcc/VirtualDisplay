@@ -250,6 +250,12 @@ class ConnectionSlot(
             }
 
         /**
+         * 拉起 daemon 用的绑定地址快照：本机节点返回用户配置的原始监听地址
+         * （不做 resolveConnectHost 转换，0.0.0.0 必须原样传给 daemon 绑定）。
+         */
+        suspend fun snapshotBindAddress(): String = settingsDataSource.getServerHost()
+
+        /**
          * 拉起本机 daemon。全应用唯一拉起入口（设置页"启动"），不在任何连接流程内自动触发。
          * 特权预检已收敛在 [DaemonProcessDataSource.startDaemon] 内部（唯一的特权检查点）。
          *
@@ -263,7 +269,8 @@ class ConnectionSlot(
                 throw IllegalStateException("当前节点（${node.name}）不支持本地拉起 daemon")
             }
             val (host, port, password) = snapshotConnectTarget()
-            val started = withContext(Dispatchers.IO) { proc.startDaemon(port, host, password) }
+            val bindAddress = snapshotBindAddress()
+            val started = withContext(Dispatchers.IO) { proc.startDaemon(port, bindAddress, password) }
             if (!started) throw PrivilegeException("启动服务端进程失败")
             _daemonPid.value = withContext(Dispatchers.IO) { proc.getDaemonPid() }
         }
@@ -289,7 +296,7 @@ class ConnectionSlot(
                 if (cachedPid <= 0 || !daemonListening) {
                     Log.i(TAG, "[${node.uniqueKey()}] Daemon not alive, restarting...")
                     val started = runCatching {
-                        proc.startDaemon(port, host, password)
+                        proc.startDaemon(port, snapshotBindAddress(), password)
                     }.getOrDefault(false)
                     if (!started) return false
                     _daemonPid.value = proc.getDaemonPid()

@@ -194,16 +194,16 @@ object AppSettings {
         context.applicationContext.dataStore.edit { it[serverPortKey] = port }
     }
 
-    /** 监听地址流（默认本机回环地址）。 */
+    /** 监听地址流（默认 127.0.0.1）。 */
     fun serverHostFlow(context: Context): Flow<String> {
         return context.applicationContext.dataStore.data.map { prefs ->
-            prefs[serverHostKey] ?: NetUtils.getDefaultLoopback()
+            prefs[serverHostKey] ?: NetUtils.LOCAL_HOST
         }
     }
 
-    /** 读取当前监听地址（默认本机回环地址）。 */
+    /** 读取当前监听地址（默认 127.0.0.1）。 */
     suspend fun getServerHost(context: Context): String {
-        return context.applicationContext.dataStore.data.first()[serverHostKey] ?: NetUtils.getDefaultLoopback()
+        return context.applicationContext.dataStore.data.first()[serverHostKey] ?: NetUtils.LOCAL_HOST
     }
 
     /** 持久化监听地址。 */

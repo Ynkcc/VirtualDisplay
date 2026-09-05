@@ -4,6 +4,8 @@ import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -390,6 +392,14 @@ fun SettingsScreen(
                         )
 
                         Box(modifier = Modifier.fillMaxWidth()) {
+                            val hostInteractionSource = remember { MutableInteractionSource() }
+                            LaunchedEffect(hostInteractionSource) {
+                                hostInteractionSource.interactions.collect { interaction ->
+                                    if (interaction is PressInteraction.Release) {
+                                        hostMenuExpanded = true
+                                    }
+                                }
+                            }
                             OutlinedTextField(
                                 value = serverHost,
                                 onValueChange = {},
@@ -402,9 +412,8 @@ fun SettingsScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { hostMenuExpanded = true }
+                                interactionSource = hostInteractionSource,
+                                modifier = Modifier.fillMaxWidth()
                             )
                             DropdownMenu(
                                 expanded = hostMenuExpanded,
