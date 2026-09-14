@@ -162,8 +162,8 @@ class MultiConnectionRepository(
     override suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean> =
         activeSlot?.injectInputWithDisplayId(event, displayId) ?: Result.failure(noActiveSlotError())
 
-    override suspend fun getActiveDisplayIds(): Result<IntArray> =
-        activeSlot?.getActiveDisplayIds() ?: Result.failure(noActiveSlotError())
+    override suspend fun getAllDisplayIds(): Result<IntArray> =
+        activeSlot?.getAllDisplayIds() ?: Result.failure(noActiveSlotError())
 
     override suspend fun getActiveDisplayInfos(): Result<List<ActiveDisplayInfo>> =
         activeSlot?.getActiveDisplayInfos() ?: Result.failure(noActiveSlotError())

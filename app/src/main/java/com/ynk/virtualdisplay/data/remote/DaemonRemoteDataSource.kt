@@ -43,8 +43,8 @@ class DaemonRemoteDataSource(
         controlApi.resizeDisplay(displayId, w, h, dpi)
 
     /** 获取当前活跃的显示器 id 列表。 */
-    suspend fun getActiveDisplayIds(): Result<IntArray> =
-        controlApi.getActiveDisplayIds()
+    suspend fun getAllDisplayIds(): Result<IntArray> =
+        controlApi.getAllDisplayIds()
 
     /** 获取当前活跃显示器的详细信息列表。 */
     suspend fun getActiveDisplayInfos(): Result<List<ActiveDisplayInfo>> =

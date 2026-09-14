@@ -143,8 +143,8 @@ class ConnectionSlot(
     override suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean> =
         withContext(slotDispatcher) { resources.injectInputWithDisplayId(event, displayId) }
 
-    override suspend fun getActiveDisplayIds(): Result<IntArray> =
-        remoteDataSource.getActiveDisplayIds()
+    override suspend fun getAllDisplayIds(): Result<IntArray> =
+        remoteDataSource.getAllDisplayIds()
 
     override suspend fun getActiveDisplayInfos(): Result<List<ActiveDisplayInfo>> =
         remoteDataSource.getActiveDisplayInfos()

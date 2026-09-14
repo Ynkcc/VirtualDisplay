@@ -92,12 +92,14 @@ val appModule = module {
 
     // === 数据层 ===
     // Repository 只做数据编排，调用 DataSource + transport/rpc/videoController
-    single<IDisplayRepository> {
+    // 先注册实现类，再分别绑定两个接口（都指向同一个单例实例），与上方 DaemonControlApiImpl 同理
+    single {
         MultiConnectionRepository(
             slotFactory = get(),
             scope = get(named("processScope")) // 与 VideoStreamController 共享进程级守护 Scope，不可 cancel
         )
     }
+    single<IDisplayRepository> { get<MultiConnectionRepository>() }
     single<NodeConnectionManager> { get<MultiConnectionRepository>() }
 
     // === 领域层 ===

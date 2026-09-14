@@ -108,7 +108,8 @@ interface IDisplayRepository {
     suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean>
 
     /** 获取当前 Daemon 中的活动显示器 ID 列表 */
-    suspend fun getActiveDisplayIds(): Result<IntArray>
+    /** 查询系统全部显示器 ID 列表（含非 daemon 管理的显示器）。 */
+    suspend fun getAllDisplayIds(): Result<IntArray>
 
     /** 获取当前 Daemon 中活动显示器的详细信息（尺寸/DPI/rotation） */
     suspend fun getActiveDisplayInfos(): Result<List<ActiveDisplayInfo>>

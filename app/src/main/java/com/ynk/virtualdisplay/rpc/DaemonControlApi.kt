@@ -46,8 +46,11 @@ interface DaemonControlApi {
     /** 查询已安装应用列表（可能较慢，内部使用更长超时）。 */
     suspend fun listApps(): Result<List<DeviceMessage.AppEntry>>
 
-    /** 查询当前活跃显示器 ID 列表。 */
-    suspend fun getActiveDisplayIds(): Result<IntArray>
+    /**
+     * 查询系统全部显示器 ID 列表（含非 daemon 管理的显示器；区分归属请用
+     * [getActiveDisplayInfos] 的 isOwned 标记）。
+     */
+    suspend fun getAllDisplayIds(): Result<IntArray>
 
     /** 查询当前活跃显示器的详细信息列表。 */
     suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>>
@@ -185,7 +188,7 @@ class DaemonControlApiImpl(
 
     // ====================== 显示器查询 ======================
 
-    override suspend fun getActiveDisplayIds(): Result<IntArray> =
+    override suspend fun getAllDisplayIds(): Result<IntArray> =
         sendAndTransform(ControlMessage.GetActiveDisplayIds) { resp ->
             val listResp = resp as? DeviceMessage.ActiveDisplaysResponse
                 ?: throw IllegalStateException("Unexpected response type: $resp")
