@@ -3,7 +3,7 @@ package com.ynk.virtualdisplay
 import android.app.Application
 import android.content.Context
 import android.util.Log
-import com.ynk.virtualdisplay.data.AppSettings
+import com.ynk.virtualdisplay.data.local.AppDataStore
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
 import com.ynk.virtualdisplay.di.appModule
 import com.ynk.virtualdisplay.di.coreModule
@@ -39,7 +39,7 @@ class MyApplication : Application() {
         ExceptionUtils.setupGlobalCrashHandler()
         Log.i(TAG, "冷启动：初始化 AppSettings 并加载所有模块")
 
-        AppSettings.init(this)
+        AppDataStore.init(this)
 
         startKoin {
             androidContext(this@MyApplication)

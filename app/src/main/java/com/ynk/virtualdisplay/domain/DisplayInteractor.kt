@@ -1,6 +1,7 @@
 package com.ynk.virtualdisplay.domain
 
 import android.util.Log
+import com.ynk.virtualdisplay.data.ServerNode
 import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
 import com.ynk.virtualdisplay.data.model.ALL_DISPLAY_FLAGS
 import com.ynk.virtualdisplay.data.model.SavedDisplay
@@ -8,8 +9,9 @@ import com.ynk.virtualdisplay.data.process.DaemonProcessDataSource
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.data.repository.DisplayOwner
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
-import com.ynk.virtualdisplay.protocol.DeviceMessage
-import com.ynk.virtualdisplay.ui.main.DisplayInfoModel
+import com.ynk.virtualdisplay.data.repository.NodeConnectionManager
+import com.ynk.virtualdisplay.domain.model.DisplayInfo
+import com.ynk.virtualdisplay.domain.model.RemoteAppInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 
@@ -26,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
  */
 class DisplayInteractor(
     private val repository: IDisplayRepository,
+    private val nodeConnectionManager: NodeConnectionManager,
     private val processDataSource: DaemonProcessDataSource,
     private val settingsDataSource: AppSettingsDataSource
 ) {
@@ -73,9 +76,9 @@ class DisplayInteractor(
         repository.bindService()
     }
 
-    /** 切换活跃节点（透传 [IDisplayRepository.setActiveNode]）。 */
-    fun setActiveNode(node: com.ynk.virtualdisplay.data.ServerNode) {
-        repository.setActiveNode(node)
+    /** 切换活跃节点（透传 [NodeConnectionManager.setActiveNode]）。 */
+    fun setActiveNode(node: ServerNode) {
+        nodeConnectionManager.setActiveNode(node)
     }
 
     /**
@@ -85,7 +88,7 @@ class DisplayInteractor(
      * 获取指定节点的真实 [IDisplayRepository] 后直连操作视频/输入等底层能力。
      */
     fun getSlot(nodeKey: String): IDisplayRepository? {
-        return repository.getSlot(nodeKey)
+        return nodeConnectionManager.getSlot(nodeKey)
     }
 
     /**
@@ -177,7 +180,7 @@ class DisplayInteractor(
      *
      * @param forceRefresh 为 true 时忽略缓存强制向 daemon 重新拉取（用于下拉刷新）
      */
-    suspend fun listApps(forceRefresh: Boolean = false): Result<List<DeviceMessage.AppEntry>> {
+    suspend fun listApps(forceRefresh: Boolean = false): Result<List<RemoteAppInfo>> {
         return repository.listApps(forceRefresh)
     }
 
@@ -204,7 +207,7 @@ class DisplayInteractor(
     ): DisplayModelsResult {
         val displaysList = savedDisplays.map { display ->
             val owner = owners[display.id]
-            DisplayInfoModel(
+            DisplayInfo(
                 id = display.id,
                 name = display.name,
                 width = display.width,
@@ -270,6 +273,6 @@ class DisplayInteractor(
  * 显示器列表组装结果：UI 模型列表 + 孤儿显示器 id 列表。
  */
 data class DisplayModelsResult(
-    val displays: List<DisplayInfoModel>,
+    val displays: List<DisplayInfo>,
     val orphanDisplayIds: List<Int>
 )

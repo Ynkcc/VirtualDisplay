@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.ynk.virtualdisplay.data.model.AppInfo
 import com.ynk.virtualdisplay.data.repository.RecentAppHelper
-import com.ynk.virtualdisplay.protocol.DeviceMessage
+import com.ynk.virtualdisplay.domain.model.RemoteAppInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -31,17 +31,17 @@ import kotlinx.coroutines.withContext
  * 最近启动记录仍从本地 SharedPreferences 读取。
  *
  * 列表按「最近启动 / 用户应用 / 系统应用」分组展示，
- * 系统/用户由 [DeviceMessage.AppEntry.isSystem] 区分。
+ * 系统/用户由 [RemoteAppInfo.isSystem] 区分。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppSelectionDialog(
-    loadApps: suspend (forceRefresh: Boolean) -> Result<List<DeviceMessage.AppEntry>>,
+    loadApps: suspend (forceRefresh: Boolean) -> Result<List<RemoteAppInfo>>,
     onDismiss: () -> Unit,
     onAppSelected: (AppInfo) -> Unit
 ) {
     val context = LocalContext.current
-    var apps by remember { mutableStateOf<List<DeviceMessage.AppEntry>>(emptyList()) }
+    var apps by remember { mutableStateOf<List<RemoteAppInfo>>(emptyList()) }
     var recentPkgs by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -77,7 +77,7 @@ fun AppSelectionDialog(
 
     // 搜索时同时匹配应用名称与包名（大小写不敏感）
     val query = searchQuery.trim()
-    val filteredBySystem = { list: List<DeviceMessage.AppEntry> ->
+    val filteredBySystem = { list: List<RemoteAppInfo> ->
         list.filter { showSystemApps || !it.isSystem }
     }
     val matched = if (query.isEmpty()) {
@@ -235,7 +235,7 @@ private fun SectionHeader(text: String, isRecent: Boolean) {
 }
 
 @Composable
-private fun AppRow(app: DeviceMessage.AppEntry, isRecent: Boolean, onClick: () -> Unit) {
+private fun AppRow(app: RemoteAppInfo, isRecent: Boolean, onClick: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()

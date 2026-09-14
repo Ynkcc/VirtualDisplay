@@ -4,7 +4,8 @@ import android.util.Log
 import android.view.InputEvent
 import android.view.Surface
 import com.ynk.virtualdisplay.data.ServerNode
-import com.ynk.virtualdisplay.protocol.DeviceMessage
+import com.ynk.virtualdisplay.domain.model.ActiveDisplayInfo
+import com.ynk.virtualdisplay.domain.model.RemoteAppInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
@@ -25,7 +26,7 @@ import kotlinx.coroutines.flow.*
 class MultiConnectionRepository(
     private val slotFactory: ConnectionSlotFactory,
     private val scope: CoroutineScope
-) : IDisplayRepository {
+) : IDisplayRepository, NodeConnectionManager {
 
     companion object {
         private const val TAG = "MultiConnectionRepo"
@@ -152,7 +153,7 @@ class MultiConnectionRepository(
     override suspend fun launchHome(displayId: Int): Result<Int> =
         activeSlot?.launchHome(displayId) ?: Result.failure(noActiveSlotError())
 
-    override suspend fun listApps(forceRefresh: Boolean): Result<List<DeviceMessage.AppEntry>> =
+    override suspend fun listApps(forceRefresh: Boolean): Result<List<RemoteAppInfo>> =
         activeSlot?.listApps(forceRefresh) ?: Result.failure(noActiveSlotError())
 
     override suspend fun injectInput(event: InputEvent): Result<Boolean> =
@@ -164,7 +165,7 @@ class MultiConnectionRepository(
     override suspend fun getActiveDisplayIds(): Result<IntArray> =
         activeSlot?.getActiveDisplayIds() ?: Result.failure(noActiveSlotError())
 
-    override suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>> =
+    override suspend fun getActiveDisplayInfos(): Result<List<ActiveDisplayInfo>> =
         activeSlot?.getActiveDisplayInfos() ?: Result.failure(noActiveSlotError())
 
     override fun setVideoConfigCallback(callback: ((width: Int, height: Int) -> Unit)?) {

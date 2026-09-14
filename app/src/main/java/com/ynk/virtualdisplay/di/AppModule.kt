@@ -6,6 +6,7 @@ import com.ynk.virtualdisplay.data.remote.DaemonRemoteDataSource
 import com.ynk.virtualdisplay.data.repository.MultiConnectionRepository
 import com.ynk.virtualdisplay.data.repository.ConnectionSlotFactory
 import com.ynk.virtualdisplay.data.repository.IDisplayRepository
+import com.ynk.virtualdisplay.data.repository.NodeConnectionManager
 import com.ynk.virtualdisplay.domain.DisplayInteractor
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import com.ynk.virtualdisplay.manager.ShizukuManager
@@ -97,11 +98,13 @@ val appModule = module {
             scope = get(named("processScope")) // 与 VideoStreamController 共享进程级守护 Scope，不可 cancel
         )
     }
+    single<NodeConnectionManager> { get<MultiConnectionRepository>() }
 
     // === 领域层 ===
     single {
         DisplayInteractor(
             repository = get(),
+            nodeConnectionManager = get(),
             processDataSource = get(),
             settingsDataSource = get()
         )

@@ -8,9 +8,9 @@ import com.ynk.virtualdisplay.data.ServerNode
 import com.ynk.virtualdisplay.data.local.AppSettingsDataSource
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
 import com.ynk.virtualdisplay.domain.DisplayInteractor
+import com.ynk.virtualdisplay.domain.model.RemoteAppInfo
 import com.ynk.virtualdisplay.manager.DisplayMetricsManager
 import com.ynk.virtualdisplay.manager.ShizukuManager
-import com.ynk.virtualdisplay.protocol.DeviceMessage
 import com.ynk.virtualdisplay.util.NetUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -361,7 +361,7 @@ class MainViewModel(
         return interactor.launchHome(displayId)
     }
 
-    suspend fun listApps(forceRefresh: Boolean = false): Result<List<DeviceMessage.AppEntry>> {
+    suspend fun listApps(forceRefresh: Boolean = false): Result<List<RemoteAppInfo>> {
         return interactor.listApps(forceRefresh)
     }
 

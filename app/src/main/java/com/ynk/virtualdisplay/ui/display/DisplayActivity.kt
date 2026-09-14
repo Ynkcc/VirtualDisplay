@@ -3,7 +3,6 @@ package com.ynk.virtualdisplay.ui.display
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -59,9 +58,6 @@ class DisplayActivity : ComponentActivity() {
 
     private var remoteDisplayId: Int? = null
     private var nodeKey: String? = null
-    private var videoWidth = 0
-    private var videoHeight = 0
-    private var currentVideoRotation = 0
 
     // Tracks the surface reported by VideoSurfaceView before videoWidth/Height
     // are known. Without this, onSurfaceAvailable drops the surface when
@@ -82,6 +78,8 @@ class DisplayActivity : ComponentActivity() {
     private lateinit var statsOverlay: TextView
     private lateinit var controlPanel: DisplayControlPanel
     private lateinit var inputController: InputController
+    private lateinit var viewport: VideoViewportController
+    private lateinit var displayInfoResolver: DisplayInfoResolver
 
     private val interactor: DisplayInteractor by inject()
     private val displayMetricsManager: DisplayMetricsManager by inject()
@@ -135,6 +133,26 @@ class DisplayActivity : ComponentActivity() {
             repository = repository,
             displayIdProvider = { remoteDisplayId },
             scope = lifecycleScope,
+        )
+
+        viewport = VideoViewportController(
+            inputController = inputController,
+            videoSurfaceView = videoSurfaceView,
+            rootLayout = rootLayout,
+            requestOrientation = { target ->
+                if (requestedOrientation != target) {
+                    requestedOrientation = target
+                    Log.i(TAG, "applyOrientationForVideo -> orientation=$target")
+                }
+            }
+        )
+
+        displayInfoResolver = DisplayInfoResolver(
+            repository = repository,
+            displayMetricsManager = displayMetricsManager,
+            settingsDataSource = settingsDataSource,
+            isLocalNode = { isLocalNode },
+            localDisplayManager = { getSystemService(android.hardware.display.DisplayManager::class.java) }
         )
 
         backCallback = object : OnBackPressedCallback(true) {
@@ -256,7 +274,7 @@ class DisplayActivity : ComponentActivity() {
             isFocusable = false
             isFocusableInTouchMode = false
             addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-                updateContentRect()
+                if (::viewport.isInitialized) viewport.updateContentRect()
             }
             setOnTouchListener { view, event ->
                 handleTouchEvent(event)
@@ -271,7 +289,7 @@ class DisplayActivity : ComponentActivity() {
             )
             setVideoCallbacks(object : VideoSurfaceView.VideoCallbacks {
                 override fun onSurfaceAvailable(surface: Surface) {
-                    Log.i(TAG, "onSurfaceAvailable: surface=$surface valid=${surface.isValid} videoSize=${videoWidth}x${videoHeight}")
+                    Log.i(TAG, "onSurfaceAvailable: surface=$surface valid=${surface.isValid} videoSize=${viewportSizeText()}")
                     pendingSurface = surface
                     // Regardless of whether videoWidth/Height are known, we MUST set the surface to the repository.
                     // For remote displays, we might never find the display in the local DisplayManager.
@@ -359,55 +377,18 @@ class DisplayActivity : ComponentActivity() {
 
     private fun onVideoConfigChanged(width: Int, height: Int) {
         Log.i(TAG, "onVideoConfigChanged: ${width}x${height}")
-        videoWidth = width
-        videoHeight = height
-        inputController.updateVideoSize(width, height)
-        videoSurfaceView.setVideoSize(width, height)
-
-        recalculateVideoRotation()
-
-        applyOrientationForVideo(width, height)
+        viewport.applyVideoDimensions(width, height)
     }
+
+    private fun viewportSizeText(): String =
+        if (::viewport.isInitialized) "${viewport.width}x${viewport.height}" else "uninitialized"
 
     private fun updateDisplayInfo(displayId: Int) {
         lifecycleScope.launch(Dispatchers.IO) {
-            // 优先走 RPC：远程和本地节点统一从服务端获取显示尺寸
-            val infosResult = repository.getActiveDisplayInfos()
-            val displayInfo = infosResult.getOrNull()?.firstOrNull { it.displayId == displayId }
-            if (displayInfo != null) {
-                val isFirstDiscovery = (videoWidth == 0 && videoHeight == 0)
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                    Log.i(TAG, "updateDisplayInfo: RPC display #$displayId size=${displayInfo.width}x${displayInfo.height}")
-                    applyDisplayDimensions(displayInfo.width, displayInfo.height, displayInfo.dpi, isFirstDiscovery)
-                }
-                return@launch
-            }
-
-            // 回退路径：本机节点本地 DisplayManager 直接查
-            if (isLocalNode) {
-                val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
-                val display = dm.getDisplay(displayId)
-                if (display != null) {
-                    val spec = displayMetricsManager.getVirtualDisplaySpec(display)
-                    val isFirstDiscovery = (videoWidth == 0 && videoHeight == 0)
-                    kotlinx.coroutines.withContext(Dispatchers.Main) {
-                        applyDisplayDimensions(spec.width, spec.height, spec.dpi, isFirstDiscovery)
-                    }
-                    return@launch
-                }
-            }
-
-            // 最后回退：从本地配置读缓存（所有节点通用）
-            val node = settingsDataSource.getCurrentServerNodeSync()
-            val saved = settingsDataSource.getDisplaysForServer(node).find { it.id == displayId }
-            if (saved != null) {
-                val isFirstDiscovery = (videoWidth == 0 && videoHeight == 0)
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                    Log.i(TAG, "updateDisplayInfo: found saved display #$displayId size=${saved.width}x${saved.height}")
-                    applyDisplayDimensions(saved.width, saved.height, saved.dpi, isFirstDiscovery)
-                }
-            } else {
-                Log.w(TAG, "updateDisplayInfo: Display #$displayId not found via RPC, local DM, or saved cache")
+            val isFirstDiscovery = (viewport.width == 0 && viewport.height == 0)
+            val spec = displayInfoResolver.resolve(displayId) ?: return@launch
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                applyDisplayDimensions(spec.width, spec.height, spec.dpi, isFirstDiscovery)
             }
         }
     }
@@ -449,12 +430,8 @@ class DisplayActivity : ComponentActivity() {
     }
 
     private fun applyDisplayDimensions(width: Int, height: Int, dpi: Int, isFirstDiscovery: Boolean) {
-        if (videoWidth != width || videoHeight != height) {
-            Log.i(TAG, "applyDisplayDimensions: #$remoteDisplayId size=${width}x${height} (prev=${videoWidth}x${videoHeight})")
-            videoWidth = width
-            videoHeight = height
-            inputController.updateVideoSize(width, height)
-            videoSurfaceView.setVideoSize(width, height)
+        if (viewport.applyVideoDimensions(width, height)) {
+            Log.i(TAG, "applyDisplayDimensions: #$remoteDisplayId size=${width}x${height}")
 
             // Retroactively feed the pending surface to the decoder if it
             // arrived before display dimensions were known.
@@ -481,52 +458,6 @@ class DisplayActivity : ComponentActivity() {
             } else {
                 Log.i(TAG, "applyDisplayDimensions: first discovery, skipping resize (display already created with correct dimensions)")
             }
-        }
-    }
-
-    /**
-     * 重新评估视频旋转角度。视频在服务端始终以原始方向渲染（VD 冻结在 ROTATION_0），
-     * 是否需要在客户端坐标系中旋转完全取决于「视频宽高比」与「当前 view 宽高比」是否一致。
-     *
-     * 该角度必须在两处时机都重新计算：
-     *  1. onVideoConfigChanged —— 视频尺寸变化（如应用切到横屏），此时 view 可能还是旧方向；
-     *  2. updateContentRect（布局变化）—— Activity 旋转（configChanges 不重建）后 view 已换方向，
-     *     但视频尺寸未再变化。若只在时机 1 计算，rotation 会卡在旧值导致触摸坐标永久错乱。
-     */
-    private fun recalculateVideoRotation() {
-        if (!::inputController.isInitialized || !::rootLayout.isInitialized) return
-        if (videoWidth <= 0 || videoHeight <= 0) return
-        val viewW = rootLayout.width
-        val viewH = rootLayout.height
-        if (viewW <= 0 || viewH <= 0) return
-
-        val needRotate = (videoWidth > videoHeight) != (viewW > viewH)
-        val newRotation = if (needRotate) 90 else 0
-        if (newRotation != currentVideoRotation) {
-            Log.i(TAG, "recalculateVideoRotation: view=${viewW}x${viewH} video=${videoWidth}x${videoHeight} -> rotation=$newRotation")
-            currentVideoRotation = newRotation
-            inputController.setVideoRotation(newRotation)
-            inputController.getContentRect(rootLayout)
-        }
-    }
-
-    private fun updateContentRect() {
-        if (::inputController.isInitialized && ::rootLayout.isInitialized) {
-            recalculateVideoRotation()
-            inputController.getContentRect(rootLayout)
-        }
-    }
-
-    private fun applyOrientationForVideo(width: Int, height: Int) {
-        if (width <= 0 || height <= 0) return
-        val targetOrientation = when {
-            width > height -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            height > width -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-            else -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
-        }
-        if (requestedOrientation != targetOrientation) {
-            requestedOrientation = targetOrientation
-            Log.i(TAG, "applyOrientationForVideo ${width}x${height} -> orientation=$targetOrientation")
         }
     }
 

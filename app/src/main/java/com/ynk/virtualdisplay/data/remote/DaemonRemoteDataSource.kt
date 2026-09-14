@@ -1,12 +1,16 @@
 package com.ynk.virtualdisplay.data.remote
 
 import android.view.InputEvent
+import com.ynk.virtualdisplay.domain.model.ActiveDisplayInfo
+import com.ynk.virtualdisplay.domain.model.RemoteAppInfo
+import com.ynk.virtualdisplay.protocol.DeviceMessage
 import com.ynk.virtualdisplay.rpc.DaemonControlApi
 
 /**
  * 远程（RPC）数据源：通过 TCP + RPC 协议调用 scrcpy daemon 的控制接口。
  *
- * 内部直接委托给 [DaemonControlApi]，主要作用是：
+ * 内部委托给 [DaemonControlApi]，并承担协议 DTO 到领域模型的映射，
+ * 使上层（Repository / domain / ui）不再感知 protocol 包：
  * - 在 data 层与 rpc 层之间增加语义化的边界（Repository 不再直接感知 RPC 层）
  * - 将来如需替换为 IPC / AIDL / HTTP 等其他传输方式，只改此文件即可
  * - 可在此统一添加超时、重试、错误码转义等横切逻辑
@@ -43,8 +47,8 @@ class DaemonRemoteDataSource(
         controlApi.getActiveDisplayIds()
 
     /** 获取当前活跃显示器的详细信息列表。 */
-    suspend fun getActiveDisplayInfos(): Result<List<com.ynk.virtualdisplay.protocol.DeviceMessage.DisplayInfoEntry>> =
-        controlApi.getActiveDisplayInfos()
+    suspend fun getActiveDisplayInfos(): Result<List<ActiveDisplayInfo>> =
+        controlApi.getActiveDisplayInfos().map { list -> list.map { it.toDomain() } }
 
     // === 应用启动 ===
 
@@ -57,8 +61,8 @@ class DaemonRemoteDataSource(
         controlApi.launchHome(displayId)
 
     /** 获取设备上已安装应用列表。 */
-    suspend fun listApps(): Result<List<com.ynk.virtualdisplay.protocol.DeviceMessage.AppEntry>> =
-        controlApi.listApps()
+    suspend fun listApps(): Result<List<RemoteAppInfo>> =
+        controlApi.listApps().map { list -> list.map { it.toDomain() } }
 
     // === 输入注入 (scrcpy-native protocol via ROLE_CONTROL socket) ===
 
@@ -72,10 +76,24 @@ class DaemonRemoteDataSource(
         displayId: Int, event: InputEvent, screenWidth: Int, screenHeight: Int
     ): Result<Boolean> = controlApi.injectInput(displayId, event, screenWidth, screenHeight)
 
-    // === 视频流 / 镜像切换 ===
-
     // === 守护进程生命周期 ===
 
     /** 请求远程 daemon 退出（关闭连接）。 */
     suspend fun exitDaemon(): Result<Unit> = controlApi.exitDaemon()
 }
+
+private fun DeviceMessage.AppEntry.toDomain(): RemoteAppInfo =
+    RemoteAppInfo(packageName = packageName, name = name, isSystem = isSystem)
+
+private fun DeviceMessage.DisplayInfoEntry.toDomain(): ActiveDisplayInfo =
+    ActiveDisplayInfo(
+        displayId = displayId,
+        width = width,
+        height = height,
+        dpi = dpi,
+        rotation = rotation,
+        mirrorDisplayId = mirrorDisplayId,
+        isOwned = isOwned,
+        ownerUid = ownerUid,
+        ownerPackage = ownerPackage
+    )

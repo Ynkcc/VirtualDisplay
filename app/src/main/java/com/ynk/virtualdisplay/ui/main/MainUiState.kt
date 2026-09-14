@@ -4,22 +4,8 @@ import com.ynk.virtualdisplay.data.PrivilegeMode
 import com.ynk.virtualdisplay.data.ServerNode
 import com.ynk.virtualdisplay.data.model.ShizukuState
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
+import com.ynk.virtualdisplay.domain.model.DisplayInfo
 import com.ynk.virtualdisplay.util.NetUtils
-
-/**
- * 虚拟显示器元数据模型
- */
-data class DisplayInfoModel(
-    val id: Int,
-    val name: String,
-    val width: Int,
-    val height: Int,
-    val dpi: Int,
-    val mirrorDisplayId: Int = -1,
-    val isOwned: Boolean = false,
-    val ownerPackage: String? = null,
-    val ownerUid: Int = 0
-)
 
 enum class ScreenTab {
     CONSOLE,
@@ -33,7 +19,7 @@ data class MainUiState(
     val shizukuState: ShizukuState = ShizukuState.Checking,
     val connectionStatus: ConnectionStatus = ConnectionStatus.IDLE,
     val connectionError: String? = null,
-    val displays: List<DisplayInfoModel> = emptyList(),
+    val displays: List<DisplayInfo> = emptyList(),
     val orphanDisplayIds: List<Int> = emptyList(),
     val statusMessage: String = "Ready",
     val isLoading: Boolean = false,

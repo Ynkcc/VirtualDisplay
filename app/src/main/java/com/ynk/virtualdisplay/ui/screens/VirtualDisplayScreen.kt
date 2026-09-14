@@ -1,52 +1,49 @@
 package com.ynk.virtualdisplay.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ynk.virtualdisplay.data.AppSettings
+import com.ynk.virtualdisplay.data.local.AppDataStore
 import com.ynk.virtualdisplay.data.repository.ConnectionStatus
+import com.ynk.virtualdisplay.ui.components.AppSelectionDialog
+import com.ynk.virtualdisplay.ui.components.CreateDisplayDialog
+import com.ynk.virtualdisplay.ui.components.DisplayPreset
+import com.ynk.virtualdisplay.ui.components.ErrorDetailDialog
 import com.ynk.virtualdisplay.ui.display.DisplayActivity
-import com.ynk.virtualdisplay.util.NetUtils
 import com.ynk.virtualdisplay.ui.main.MainIntent
 import com.ynk.virtualdisplay.ui.main.MainViewModel
-import com.ynk.virtualdisplay.ui.components.DisplayItem
-import com.ynk.virtualdisplay.ui.components.AppSelectionDialog
 
-
-private data class DisplayPreset(val name: String, val width: Int, val height: Int, val dpi: Int)
-
+/**
+ * 虚拟显示控制台主屏：负责状态编排与各个区块 / 弹窗的组合，
+ * 具体 UI 区块见 [ConsoleTopBar] / [ConnectionStatusBar] / [DisplayGrid]。
+ */
 @Composable
 fun VirtualDisplayScreen(
     viewModel: MainViewModel,
@@ -57,7 +54,7 @@ fun VirtualDisplayScreen(
     val displays = uiState.displays
     val orphanDisplayIds = uiState.orphanDisplayIds
     val status = uiState.statusMessage
-    
+
     var showAppSelectionDialogForDisplayId by remember { mutableStateOf<Int?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showErrorDialog by remember { mutableStateOf(false) }
@@ -83,7 +80,6 @@ fun VirtualDisplayScreen(
         viewModel.handleIntent(MainIntent.RefreshDisplays)
     }
 
-    // App Selection Dialog Handler
     showAppSelectionDialogForDisplayId?.let { displayId ->
         AppSelectionDialog(
             loadApps = { force -> viewModel.listApps(force) },
@@ -95,7 +91,6 @@ fun VirtualDisplayScreen(
         )
     }
 
-    // Gradient Background
     val backgroundBrush = Brush.verticalGradient(
         colors = listOf(
             MaterialTheme.colorScheme.background,
@@ -113,342 +108,30 @@ fun VirtualDisplayScreen(
                 .fillMaxSize()
                 .padding(16.dp)
         ) {
-            // 1. 顶部操作栏
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "虚拟显示控制台",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    val isBinding = uiState.connectionStatus == com.ynk.virtualdisplay.data.repository.ConnectionStatus.BINDING
-                    val isConnected = uiState.connectionStatus == com.ynk.virtualdisplay.data.repository.ConnectionStatus.CONNECTED ||
-                        uiState.connectionStatus == com.ynk.virtualdisplay.data.repository.ConnectionStatus.RECONNECTING
-                    TextButton(
-                        onClick = {
-                            viewModel.handleIntent(
-                                if (isConnected) MainIntent.DisconnectServer else MainIntent.ConnectServer
-                            )
-                        },
-                        enabled = !isBinding,
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = if (isConnected) MaterialTheme.colorScheme.error
-                            else MaterialTheme.colorScheme.primary
-                        )
-                    ) {
-                        Text(
-                            text = when {
-                                isBinding -> "连接中…"
-                                isConnected -> "断开"
-                                else -> "连接"
-                            },
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    IconButton(
-                        onClick = { viewModel.handleIntent(MainIntent.RefreshDisplays) },
-                        modifier = Modifier
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-                            .size(36.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "Refresh",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
+            ConsoleTopBar(
+                connectionStatus = uiState.connectionStatus,
+                onConnect = { viewModel.handleIntent(MainIntent.ConnectServer) },
+                onDisconnect = { viewModel.handleIntent(MainIntent.DisconnectServer) },
+                onRefresh = { viewModel.handleIntent(MainIntent.RefreshDisplays) }
+            )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // 2. 服务连接状态条
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                    .border(1.dp, Color.White.copy(alpha = 0.05f), RoundedCornerShape(10.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val connectionStatus = uiState.connectionStatus
-                val (statusText, statusColor) = when (connectionStatus) {
-                    ConnectionStatus.CONNECTED -> {
-                        val suffix = if (uiState.daemonPid > 0) " (PID: ${uiState.daemonPid})" else ""
-                        "已连接$suffix" to Color(0xFF26A69A)
-                    }
-                    ConnectionStatus.BINDING -> "正在绑定..." to Color(0xFFFFB74D)
-                    ConnectionStatus.RECONNECTING -> "正在重连..." to Color(0xFFFFB74D)
-                    ConnectionStatus.DISCONNECTED -> (uiState.connectionError ?: "连接断开") to Color(0xFFEF5350)
-                    ConnectionStatus.ERROR -> "错误" to Color(0xFFEF5350)
-                    ConnectionStatus.IDLE -> "空闲" to Color(0xFF78909C)
-                }
-
-                var dropdownExpanded by remember { mutableStateOf(false) }
-                var showAddDialog by remember { mutableStateOf(false) }
-                var editingNode by remember { mutableStateOf<com.ynk.virtualdisplay.data.ServerNode?>(null) }
-
-                Box {
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { dropdownExpanded = true }
-                            .padding(horizontal = 4.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .background(statusColor, RoundedCornerShape(4.dp))
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "${uiState.currentServerNode.name}: $statusText ▼",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = statusColor
-                        )
-                    }
-
-                    DropdownMenu(
-                        expanded = dropdownExpanded,
-                        onDismissRequest = { dropdownExpanded = false }
-                    ) {
-                        uiState.serverNodes.forEach { node ->
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text("${node.name} (${node.host}:${node.port})", modifier = Modifier.weight(1f))
-                                        if (node.host == uiState.currentServerNode.host && node.port == uiState.currentServerNode.port) {
-                                            Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                dropdownExpanded = false
-                                                editingNode = node
-                                            },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Edit,
-                                                contentDescription = "编辑设备",
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                dropdownExpanded = false
-                                                viewModel.handleIntent(MainIntent.RemoveServerNode(node))
-                                            },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Delete,
-                                                contentDescription = "删除设备",
-                                                tint = MaterialTheme.colorScheme.error,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    }
-                                },
-                                onClick = {
-                                    dropdownExpanded = false
-                                    viewModel.handleIntent(MainIntent.SelectServerNode(node))
-                                }
-                            )
-                        }
-                        HorizontalDivider()
-                        DropdownMenuItem(
-                            text = { Text("+ 添加外部设备...") },
-                            onClick = {
-                                dropdownExpanded = false
-                                showAddDialog = true
-                            }
-                        )
-                    }
-                }
-
-                if (showAddDialog) {
-                    var addName by remember { mutableStateOf("") }
-                    var addHost by remember { mutableStateOf("") }
-                    var addPort by remember { mutableStateOf("27183") }
-                    var addPassword by remember { mutableStateOf("") }
-                    val addHostValid = NetUtils.isValidHostFormat(addHost.trim())
-                    val addPortValid = (addPort.toIntOrNull() ?: 27183) in 1024..65535
-                    val canAdd = addName.isNotBlank() && addHostValid && addPortValid
-
-                    AlertDialog(
-                        onDismissRequest = { showAddDialog = false },
-                        title = { Text("添加外部设备") },
-                        text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
-                                    value = addName,
-                                    onValueChange = { addName = it },
-                                    label = { Text("设备名称") },
-                                    placeholder = { Text("例: 电视") },
-                                    singleLine = true
-                                )
-                                OutlinedTextField(
-                                    value = addHost,
-                                    onValueChange = { addHost = it },
-                                    label = { Text("设备 IP / 主机名") },
-                                    placeholder = { Text("192.168.1.100") },
-                                    isError = addHost.isNotBlank() && !addHostValid,
-                                    supportingText = if (addHost.isNotBlank() && !addHostValid) {
-                                        { Text("IP 或主机名格式无效", fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
-                                    } else null,
-                                    singleLine = true
-                                )
-                                OutlinedTextField(
-                                    value = addPort,
-                                    onValueChange = { addPort = it.filter { c -> c.isDigit() } },
-                                    label = { Text("设备端口 (1024-65535)") },
-                                    placeholder = { Text("27183") },
-                                    isError = addPort.isNotBlank() && !addPortValid,
-                                    supportingText = if (addPort.isNotBlank() && !addPortValid) {
-                                        { Text("端口需在 1024-65535 范围内", fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
-                                    } else null,
-                                    singleLine = true
-                                )
-                                OutlinedTextField(
-                                    value = addPassword,
-                                    onValueChange = { addPassword = it },
-                                    label = { Text("连接密码 (可选)") },
-                                    singleLine = true
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    if (canAdd) {
-                                        val portNum = addPort.toIntOrNull() ?: 27183
-                                        val newNode = com.ynk.virtualdisplay.data.ServerNode(addName.trim(), addHost.trim(), portNum, addPassword)
-                                        viewModel.handleIntent(MainIntent.AddServerNode(newNode))
-                                        viewModel.handleIntent(MainIntent.SelectServerNode(newNode))
-                                        showAddDialog = false
-                                    }
-                                },
-                                enabled = canAdd
-                            ) {
-                                Text("添加并切换")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { showAddDialog = false }) {
-                                Text("取消")
-                            }
-                        }
-                    )
-                }
-
-                editingNode?.let { node ->
-                    var editName by remember(node) { mutableStateOf(node.name) }
-                    var editHost by remember(node) { mutableStateOf(node.host) }
-                    var editPort by remember(node) { mutableStateOf(node.port.toString()) }
-                    var editPassword by remember(node) { mutableStateOf(node.password) }
-                    val editHostValid = NetUtils.isValidHostFormat(editHost.trim())
-                    val editPortValid = (editPort.toIntOrNull() ?: 27183) in 1024..65535
-                    val canSave = editName.isNotBlank() && editHostValid && editPortValid
-
-                    AlertDialog(
-                        onDismissRequest = { editingNode = null },
-                        title = { Text("编辑外部设备") },
-                        text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
-                                    value = editName,
-                                    onValueChange = { editName = it },
-                                    label = { Text("设备名称") },
-                                    placeholder = { Text("例: 电视") },
-                                    singleLine = true
-                                )
-                                OutlinedTextField(
-                                    value = editHost,
-                                    onValueChange = { editHost = it },
-                                    label = { Text("设备 IP / 主机名") },
-                                    placeholder = { Text("192.168.1.100") },
-                                    isError = editHost.isNotBlank() && !editHostValid,
-                                    supportingText = if (editHost.isNotBlank() && !editHostValid) {
-                                        { Text("IP 或主机名格式无效", fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
-                                    } else null,
-                                    singleLine = true
-                                )
-                                OutlinedTextField(
-                                    value = editPort,
-                                    onValueChange = { editPort = it.filter { c -> c.isDigit() } },
-                                    label = { Text("设备端口 (1024-65535)") },
-                                    placeholder = { Text("27183") },
-                                    isError = editPort.isNotBlank() && !editPortValid,
-                                    supportingText = if (editPort.isNotBlank() && !editPortValid) {
-                                        { Text("端口需在 1024-65535 范围内", fontSize = 12.sp, color = MaterialTheme.colorScheme.error) }
-                                    } else null,
-                                    singleLine = true
-                                )
-                                OutlinedTextField(
-                                    value = editPassword,
-                                    onValueChange = { editPassword = it },
-                                    label = { Text("连接密码 (可选)") },
-                                    singleLine = true
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    if (canSave) {
-                                        val portNum = editPort.toIntOrNull() ?: 27183
-                                        val newNode = com.ynk.virtualdisplay.data.ServerNode(editName.trim(), editHost.trim(), portNum, editPassword)
-                                        viewModel.handleIntent(MainIntent.EditServerNode(node, newNode))
-                                        editingNode = null
-                                    }
-                                },
-                                enabled = canSave
-                            ) {
-                                Text("保存")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { editingNode = null }) {
-                                Text("取消")
-                            }
-                        }
-                    )
-                }
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                val isError = status.startsWith("Error:")
-                Text(
-                    text = "提示: $status",
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    color = if (isError)
-                        MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
-                    else
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = if (isError) Modifier.clickable { showErrorDialog = true } else Modifier
-                )
-            }
+            ConnectionStatusBar(
+                uiState = uiState,
+                status = status,
+                onSelectNode = { viewModel.handleIntent(MainIntent.SelectServerNode(it)) },
+                onAddNode = {
+                    viewModel.handleIntent(MainIntent.AddServerNode(it))
+                    viewModel.handleIntent(MainIntent.SelectServerNode(it))
+                },
+                onEditNode = { old, new -> viewModel.handleIntent(MainIntent.EditServerNode(old, new)) },
+                onRemoveNode = { viewModel.handleIntent(MainIntent.RemoveServerNode(it)) },
+                onErrorClick = { showErrorDialog = true }
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 4. 显示器列表头部
             Text(
                 text = "屏幕列表",
                 style = MaterialTheme.typography.titleMedium,
@@ -456,245 +139,62 @@ fun VirtualDisplayScreen(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
 
-            // 5. 显示器网格
-            if (displays.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.1f))
-                        .border(1.dp, Color.White.copy(alpha = 0.03f), RoundedCornerShape(16.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "暂无活跃的虚拟显示器",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
+            DisplayGrid(
+                displays = displays,
+                orphanDisplayIds = orphanDisplayIds,
+                gridState = gridState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                onPlay = { displayInfo ->
+                    val intent = DisplayActivity.createIntent(
+                        context,
+                        displayInfo.id,
+                        uiState.currentServerNode.uniqueKey()
                     )
-                }
-            } else {
-                LazyVerticalGrid(
-                    state = gridState,
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 72.dp)
-                ) {
-                    items(displays, key = { it.id }) { displayInfo ->
-                        DisplayItem(
-                            displayInfo = displayInfo,
-                            isOrphan = displayInfo.id in orphanDisplayIds,
-                            onPlay = {
-                                val intent = DisplayActivity.createIntent(
-                                    context, 
-                                    displayInfo.id, 
-                                    uiState.currentServerNode.uniqueKey()
-                                )
-                                context.startActivity(intent)
-                            },
-                            onDelete = {
-                                // 实时读取设置中的配置：是否在销毁前将应用移回主屏
-                                val moveToDefault = AppSettings.getMoveTasksOnDestroySync()
-                                viewModel.handleIntent(MainIntent.ReleaseDisplay(displayInfo.id, moveToDefault))
-                            },
-                            onLaunchApp = { showAppSelectionDialogForDisplayId = displayInfo.id },
-                            onMirror = {
-                                viewModel.handleIntent(
-                                    MainIntent.CreateDisplay(
-                                        width = displayInfo.width.toString(),
-                                        height = displayInfo.height.toString(),
-                                        dpi = displayInfo.dpi.toString(),
-                                        mirrorDisplayId = displayInfo.id
-                                    )
-                                )
-                            }
+                    context.startActivity(intent)
+                },
+                onDelete = { displayInfo ->
+                    // 实时读取设置中的配置：是否在销毁前将应用移回主屏
+                    val moveToDefault = AppDataStore.getMoveTasksOnDestroySync()
+                    viewModel.handleIntent(MainIntent.ReleaseDisplay(displayInfo.id, moveToDefault))
+                },
+                onLaunchApp = { displayInfo -> showAppSelectionDialogForDisplayId = displayInfo.id },
+                onMirror = { displayInfo ->
+                    viewModel.handleIntent(
+                        MainIntent.CreateDisplay(
+                            width = displayInfo.width.toString(),
+                            height = displayInfo.height.toString(),
+                            dpi = displayInfo.dpi.toString(),
+                            mirrorDisplayId = displayInfo.id
                         )
-                    }
-                }
-            }
-        }
-
-        // 错误详情弹窗
-        if (showErrorDialog) {
-            AlertDialog(
-                onDismissRequest = { showErrorDialog = false },
-                title = { Text("\u521b\u5efa\u5931\u8d25", fontWeight = FontWeight.Bold) },
-                text = {
-                    Text(
-                        text = status,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("\u9519\u8bef\u65e5\u5fd7", status))
-                        Toast.makeText(context, "\u5df2\u590d\u5236", Toast.LENGTH_SHORT).show()
-                        showErrorDialog = false
-                    }) {
-                        Text("\u590d\u5236")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showErrorDialog = false }) {
-                        Text("\u5173\u95ed")
-                    }
                 }
             )
         }
 
-        // 6. 新建屏幕弹窗 (Creation Dialog)
-        if (showCreateDialog) {
-
-            Dialog(onDismissRequest = { showCreateDialog = false }) {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Text(
-                            text = "新建虚拟显示器",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // 输入行
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedTextField(
-                                value = uiState.inputWidth,
-                                onValueChange = { viewModel.handleIntent(MainIntent.UpdateInputs(width = it)) },
-                                label = { Text("宽度") },
-                                modifier = Modifier.weight(1f),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                            OutlinedTextField(
-                                value = uiState.inputHeight,
-                                onValueChange = { viewModel.handleIntent(MainIntent.UpdateInputs(height = it)) },
-                                label = { Text("高度") },
-                                modifier = Modifier.weight(1f),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                            OutlinedTextField(
-                                value = uiState.inputDpi,
-                                onValueChange = { viewModel.handleIntent(MainIntent.UpdateInputs(dpi = it)) },
-                                label = { Text("DPI") },
-                                modifier = Modifier.weight(0.8f),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // 预设选择器
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            presets.forEach { preset ->
-                                val isSelected = uiState.inputWidth == preset.width.toString() &&
-                                                 uiState.inputHeight == preset.height.toString() &&
-                                                 uiState.inputDpi == preset.dpi.toString()
-                                
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(
-                                            if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                        )
-                                        .border(
-                                            width = 1.dp,
-                                            color = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.08f),
-                                            shape = RoundedCornerShape(8.dp)
-                                        )
-                                        .clickable {
-                                            viewModel.handleIntent(MainIntent.UpdateInputs(
-                                                width = preset.width.toString(),
-                                                height = preset.height.toString(),
-                                                dpi = preset.dpi.toString()
-                                            ))
-                                        }
-                                        .padding(vertical = 8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = preset.name,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { showCreateDialog = false },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Text("取消", fontWeight = FontWeight.Bold)
-                            }
-
-                            Button(
-                                onClick = {
-                                    viewModel.handleIntent(MainIntent.CreateDisplay(
-                                        uiState.inputWidth, uiState.inputHeight, uiState.inputDpi
-                                    ))
-                                    showCreateDialog = false
-                                },
-                                modifier = Modifier.weight(1.5f),
-                                shape = RoundedCornerShape(10.dp),
-                                enabled = !uiState.isLoading
-                            ) {
-                                if (uiState.isLoading) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        strokeWidth = 2.dp,
-                                        color = MaterialTheme.colorScheme.onPrimary
-                                    )
-                                } else {
-                                    Text("创建并启动", fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        if (showErrorDialog) {
+            ErrorDetailDialog(message = status, onDismiss = { showErrorDialog = false })
         }
 
-        // 7. 中间偏下悬浮 + 号按钮
+        if (showCreateDialog) {
+            CreateDisplayDialog(
+                inputWidth = uiState.inputWidth,
+                inputHeight = uiState.inputHeight,
+                inputDpi = uiState.inputDpi,
+                isLoading = uiState.isLoading,
+                presets = presets,
+                onInputsChange = { w, h, d -> viewModel.handleIntent(MainIntent.UpdateInputs(w, h, d)) },
+                onDismiss = { showCreateDialog = false },
+                onConfirm = {
+                    viewModel.handleIntent(
+                        MainIntent.CreateDisplay(uiState.inputWidth, uiState.inputHeight, uiState.inputDpi)
+                    )
+                    showCreateDialog = false
+                }
+            )
+        }
+
         FloatingActionButton(
             onClick = { showCreateDialog = true },
             modifier = Modifier
@@ -725,5 +225,3 @@ fun VirtualDisplayScreen(
         }
     }
 }
-
-

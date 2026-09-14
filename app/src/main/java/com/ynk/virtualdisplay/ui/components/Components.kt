@@ -26,11 +26,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ynk.virtualdisplay.ui.main.DisplayInfoModel
+import com.ynk.virtualdisplay.domain.model.DisplayInfo
 
 @Composable
 fun DisplayItem(
-    displayInfo: DisplayInfoModel,
+    displayInfo: DisplayInfo,
     isOrphan: Boolean = false,
     onPlay: () -> Unit,
     onDelete: () -> Unit,

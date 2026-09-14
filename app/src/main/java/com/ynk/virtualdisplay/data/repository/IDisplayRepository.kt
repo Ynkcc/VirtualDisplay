@@ -1,10 +1,9 @@
 package com.ynk.virtualdisplay.data.repository
 
-import android.content.Context
 import android.view.InputEvent
 import android.view.Surface
-import com.ynk.virtualdisplay.data.AppSettings
-import com.ynk.virtualdisplay.protocol.DeviceMessage
+import com.ynk.virtualdisplay.domain.model.ActiveDisplayInfo
+import com.ynk.virtualdisplay.domain.model.RemoteAppInfo
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -26,18 +25,14 @@ enum class ConnectionStatus {
 }
 
 /**
- * 显示器管理核心仓库接口
+ * 显示器管理核心仓库接口。
  *
- * 职责：统一数据入口，屏蔽数据源差异。
+ * 职责：统一数据入口，屏蔽数据源差异；只暴露显示器操作能力，
+ * 节点编排见 [NodeConnectionManager]。
  * 业务逻辑由 [com.ynk.virtualdisplay.domain.DisplayInteractor] 编排，
  * 系统服务由 [com.ynk.virtualdisplay.manager] 层管理。
  */
 interface IDisplayRepository {
-    companion object {
-        /** 用于请求系统权限（如创建虚拟显示器）的 Activity Result 请求码。 */
-        const val REQUEST_CODE = 20260
-    }
-
     /** 连接状态流 */
     val connectionStatus: StateFlow<ConnectionStatus>
 
@@ -104,7 +99,7 @@ interface IDisplayRepository {
      * 默认使用缓存（若有）以加快重复打开对话框的速度；[forceRefresh] 为
      * true 时强制向 daemon 重新拉取并更新缓存（用于下拉刷新）。
      */
-    suspend fun listApps(forceRefresh: Boolean = false): Result<List<DeviceMessage.AppEntry>>
+    suspend fun listApps(forceRefresh: Boolean = false): Result<List<RemoteAppInfo>>
 
     /** 注入输入事件 */
     suspend fun injectInput(event: InputEvent): Result<Boolean>
@@ -112,12 +107,11 @@ interface IDisplayRepository {
     /** 注入带 DisplayId 的输入事件 */
     suspend fun injectInputWithDisplayId(event: InputEvent, displayId: Int): Result<Boolean>
 
-
     /** 获取当前 Daemon 中的活动显示器 ID 列表 */
     suspend fun getActiveDisplayIds(): Result<IntArray>
 
     /** 获取当前 Daemon 中活动显示器的详细信息（尺寸/DPI/rotation） */
-    suspend fun getActiveDisplayInfos(): Result<List<DeviceMessage.DisplayInfoEntry>>
+    suspend fun getActiveDisplayInfos(): Result<List<ActiveDisplayInfo>>
 
     /** 销毁远程特权服务 */
     fun destroyService()
@@ -130,17 +124,6 @@ interface IDisplayRepository {
 
     /** 主动向守护进程拉取并同步当前管理的显示器列表 (缓存) */
     fun refreshDisplays()
-
-    /** 切换活跃节点（仅 MultiConnectionRepository 有意义） */
-    fun setActiveNode(node: com.ynk.virtualdisplay.data.ServerNode) {}
-    /** 建立到指定节点的连接 */
-    fun connectNode(node: com.ynk.virtualdisplay.data.ServerNode) {}
-    /** 断开指定节点的连接 */
-    fun disconnectNode(node: com.ynk.virtualdisplay.data.ServerNode, killDaemon: Boolean = false) {}
-    /** 获取指定节点的 [IDisplayRepository] 槽位 */
-    fun getSlot(nodeKey: String): IDisplayRepository? = null
-    /** 获取所有活跃的连接槽 */
-    fun allSlots(): Collection<IDisplayRepository> = emptyList()
 }
 
 /**
@@ -152,21 +135,3 @@ data class DisplayOwner(
     val packageName: String? = null,
     val uid: Int = 0
 )
-
-/**
- * 便捷门面：读取/记录用户在虚拟屏幕中最近启动的应用（当前节点），
- * 内部委托 [AppSettings.recentApps] 相关实现，并固定最大条数。
- */
-object RecentAppHelper {
-    private const val MAX_LIMIT = 10
-
-    /** 读取当前节点最近启动的应用包名列表（新→旧）。 */
-    suspend fun getRecentApps(context: Context): List<String> {
-        return AppSettings.recentApps(context)
-    }
-
-    /** 将应用加入当前节点最近启动列表，超出上限自动截断。 */
-    suspend fun addRecentApp(context: Context, packageName: String) {
-        AppSettings.addRecentApp(context, packageName, MAX_LIMIT)
-    }
-}

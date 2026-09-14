@@ -1,31 +1,32 @@
 package com.ynk.virtualdisplay.video
 
 import android.media.MediaCodec
-import android.media.MediaFormat
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
 import android.util.Log
-import android.view.Choreographer
 import android.view.Surface
-import android.graphics.SurfaceTexture
-import com.ynk.virtualdisplay.decoder.VideoDecoderTuning
 import java.io.IOException
 import java.io.InputStream
-import java.util.ArrayDeque
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
- * H.264 流解码器 —— Phase1 状态机重构版。
+ * H.264 流解码器 —— 状态机 + 主循环。
  *
- * # 为什么要重构（历史崩溃根因）
+ * 职责边界：
+ * - 本类持有唯一的解码状态机 [DecoderState]、主循环（[handleTick]），以及只读 socket 的
+ *   reader 线程（[startReader]）；
+ * - codec 的创建 / 释放 / surface 切换委托给 [CodecSession]；
+ * - 输出帧的 vsync 节流与队列管理委托给 [VideoRenderScheduler]。
+ *
+ * # 为什么要这样分（历史崩溃根因）
  * 旧实现用手写 Thread(inputWorker + outputWorker) + 内部独立 HandlerThread(SurfaceRenderScheduler)
  * + 三把锁(codecLock / releaseLock / queueLock) + Choreographer 并发调度。三线程并发热切换
  * codec，极易在「releaseOutputBuffer 仍在执行时 release native codec」产生 native Data Abort
  * （use-after-free）→ SIGSEGV。防崩溃完全依赖调用方自觉「先断 socket 再 stop」。
-
+ *
  * # 本版本的线程模型
  * - [codecThread]：唯一解码 HandlerThread。**所有 MediaCodec 交互（create/configure/start/
  *   dequeueInputBuffer/queueInputBuffer/dequeueOutputBuffer/releaseOutputBuffer/release）以及
@@ -61,9 +62,7 @@ class H264StreamDecoder(
 ) {
     companion object {
         private const val TAG = "H264StreamDecoder"
-        private const val VIDEO_MIME = "video/avc"
         private const val MAX_QUEUED_FRAMES = 8
-        private const val MAX_RENDER_QUEUE = 2
     }
 
     /**
@@ -74,18 +73,12 @@ class H264StreamDecoder(
      */
     enum class DecoderState { IDLE, CONFIGURED, STARTED, STOPPING, STOPPED }
 
-    /** 单一状态机实例。所有状态读取用 @Volatile，写入统一经 [transitionTo] 在 [stateLock] 内完成。 */
+    /** 单一状态机实例。所有状态读取用 @Volatile，写入统一经 [transitionToLocked] 在 [stateLock] 内完成。 */
     @Volatile private var state: DecoderState = DecoderState.IDLE
     private val stateLock = Any()
 
     @Volatile private var width: Int = width
     @Volatile private var height: Int = height
-    @Volatile private var targetSurface: Surface? = null
-    @Volatile private var codec: MediaCodec? = null
-
-    @Volatile private var dummySurfaceTexture: SurfaceTexture? = null
-    @Volatile private var dummySurface: Surface? = null
-    @Volatile private var isUsingDummySurface: Boolean = false
 
     /** codec 输出格式确定时回调，参数为解码器标签与可见宽高。 */
     var onVideoConfig: ((codecLabel: String, width: Int, height: Int) -> Unit)? = null
@@ -93,24 +86,27 @@ class H264StreamDecoder(
     /** 超低延迟模式：输出帧不经 vsync 队列，直接以渲染时间戳 release 到 surface。 */
     var ultraLowLatency: Boolean = false
 
+    private val codecSession = CodecSession(tracker) { label, w, h ->
+        onVideoConfig?.invoke(label, w, h)
+    }
+
+    private val renderScheduler = VideoRenderScheduler(
+        codecProvider = { codecSession.mediaCodec },
+        tracker = tracker,
+        isActive = { state == DecoderState.STARTED }
+    )
+
     // ---- 单解码线程 ----
     private val codecThread = HandlerThread(
         "scrcpy-video-decoder",
         Process.THREAD_PRIORITY_VIDEO
     )
-    private lateinit var handler: Handler
+    private val handler: Handler
 
     // ---- 只读 socket 的 IO 线程（不碰 codec）----
     private var readerThread: Thread? = null
     private val frameQueue = LinkedBlockingQueue<ScrcpyFrame>(MAX_QUEUED_FRAMES)
     @Volatile private var inputFinished = false
-
-    // ---- 渲染（Choreographer doFrame 在 codecThread looper 上执行，无需锁）----
-    @Volatile private var choreographer: Choreographer? = null
-    private val renderQueue = ArrayDeque<DecodedOutputFrame>()
-    private var vsyncScheduled = false
-    private var lastRenderedFrameTimeNs = 0L
-    private val expectedFrameDeltaNs = ((1_000_000_000L / 60f) * 8L) / 10L
 
     // ---- 主循环 tick 去重 ----
     private val tickRunnable = Runnable { handleTick() }
@@ -142,8 +138,8 @@ class H264StreamDecoder(
             }
             tracker.reset()
             val created = runOnCodecThread {
-                createCodecInternal()
-                codec != null
+                codecSession.create(width, height)
+                codecSession.mediaCodec != null
             }
             if (!created) {
                 Log.e(TAG, "Codec creation failed, aborting start")
@@ -152,7 +148,7 @@ class H264StreamDecoder(
             transitionToLocked(DecoderState.CONFIGURED)
         }
         // 在解码 looper 上创建 Choreographer（其 frame callback 随后在同一 looper 回调）
-        runOnCodecThread { choreographer = Choreographer.getInstance() }
+        runOnCodecThread { renderScheduler.attachChoreographer() }
         startReader()
         synchronized(stateLock) { transitionToLocked(DecoderState.STARTED) }
         postTick(0)
@@ -200,21 +196,12 @@ class H264StreamDecoder(
      */
     fun setDisplaySurface(surface: Surface?) {
         if (!handler.post {
-                val isDummy = surface == null || !surface.isValid
-                isUsingDummySurface = isDummy
-                val target = if (!isDummy) surface else getDummySurface()
-                Log.i(TAG, "setDisplaySurface: surface=$surface valid=${surface?.isValid} isDummy=$isDummy state=$state")
-                targetSurface = target
+                codecSession.updateSurfaceTarget(surface)
                 // 运行中且已有 codec：优先直接切换 surface，失败再重建
-                val activeCodec = codec
-                if (activeCodec != null && state != DecoderState.STOPPED && state != DecoderState.STOPPING) {
-                    try {
-                        activeCodec.setOutputSurface(target)
-                        Log.i(TAG, "setOutputSurface OK: switched to new surface")
-                    } catch (e: Exception) {
-                        Log.w(TAG, "setOutputSurface failed, rebuilding codec", e)
-                        rebuildCodec()
-                    }
+                if (codecSession.mediaCodec != null &&
+                    state != DecoderState.STOPPED && state != DecoderState.STOPPING
+                ) {
+                    if (!codecSession.trySwitchOutputSurface()) rebuildCodec()
                 }
             }) {
             Log.w(TAG, "setDisplaySurface dropped: codec thread already quitting")
@@ -330,7 +317,7 @@ class H264StreamDecoder(
 
     /** 单步处理一帧输入 + 一次输出 drain。返回是否产生了实质推进。 */
     private fun processOnce(): Boolean {
-        val activeCodec = codec
+        val activeCodec = codecSession.mediaCodec
         if (activeCodec == null) return false
 
         var advanced = false
@@ -444,19 +431,16 @@ class H264StreamDecoder(
         }
         tracker.recordDecode(bufferInfo.presentationTimeUs)
 
-        if (targetSurface != null && !isUsingDummySurface) {
+        if (codecSession.hasOutputSurface && !codecSession.usingDummySurface) {
             if (ultraLowLatency) {
-                runCatching { activeCodec.releaseOutputBuffer(outputIndex, System.nanoTime()) }
-                tracker.recordRender(dequeuedAtNs)
+                renderScheduler.renderImmediately(outputIndex, dequeuedAtNs)
             } else {
-                offerRenderFrame(
-                    DecodedOutputFrame(
-                        bufferIndex = outputIndex,
-                        presentationTimeUs = bufferInfo.presentationTimeUs,
-                        flags = bufferInfo.flags,
-                        size = bufferInfo.size,
-                        dequeuedAtNs = dequeuedAtNs
-                    )
+                renderScheduler.offer(
+                    bufferIndex = outputIndex,
+                    presentationTimeUs = bufferInfo.presentationTimeUs,
+                    flags = bufferInfo.flags,
+                    size = bufferInfo.size,
+                    dequeuedAtNs = dequeuedAtNs
                 )
             }
         } else {
@@ -465,160 +449,25 @@ class H264StreamDecoder(
     }
 
     private fun handleFormatChanged(activeCodec: MediaCodec) {
-        val format = activeCodec.outputFormat
-        val w = format.getInteger(MediaFormat.KEY_WIDTH)
-        val h = format.getInteger(MediaFormat.KEY_HEIGHT)
-
-        val visibleWidth = if (format.containsKey("crop-right") && format.containsKey("crop-left")) {
-            format.getInteger("crop-right") - format.getInteger("crop-left") + 1
-        } else {
-            w
-        }
-        val visibleHeight = if (format.containsKey("crop-bottom") && format.containsKey("crop-top")) {
-            format.getInteger("crop-bottom") - format.getInteger("crop-top") + 1
-        } else {
-            h
-        }
-
-        tracker.actualWidth = visibleWidth
-        tracker.actualHeight = visibleHeight
+        val visible = codecSession.readVisibleOutputSize() ?: return
         // CRITICAL: 更新本地 width/height 为 codec 真实输出尺寸，使后续 updateResolution()
         // （来自 stale resize job）变为 no-op 而非触发 rebuildCodec —— 避免在 config 帧
         // (SPS/PPS) 已被消费后重建 codec，导致新 codec 永远解不了 P 帧 → 永久黑屏。
-        width = visibleWidth
-        height = visibleHeight
-        Log.i(TAG, "Output format changed: coded=${w}x${h} visible=${visibleWidth}x${visibleHeight}")
-        onVideoConfig?.invoke("H.264", visibleWidth, visibleHeight)
+        width = visible.first
+        height = visible.second
     }
 
     private fun maybeLogStats() {
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastStatsLogMs >= 3000) {
             lastStatsLogMs = nowMs
-            Log.i(TAG, "Decoder stats: state=$state queued=${frameQueue.size} renderPending=${renderQueue.size} isDummy=$isUsingDummySurface")
+            Log.i(TAG, "Decoder stats: state=$state queued=${frameQueue.size} isDummy=${codecSession.usingDummySurface}")
         }
     }
-
-    // ============================================================
-    // 渲染调度（Choreographer doFrame 在 codecThread looper 上执行）
-    // ============================================================
-
-    private data class DecodedOutputFrame(
-        val bufferIndex: Int,
-        val presentationTimeUs: Long,
-        val flags: Int,
-        val size: Int,
-        val dequeuedAtNs: Long
-    )
-
-    private val frameCallback: Choreographer.FrameCallback = Choreographer.FrameCallback { frameTimeNanos ->
-        if (state != DecoderState.STARTED) {
-            vsyncScheduled = false
-            return@FrameCallback
-        }
-        val actualFrameDeltaNs = frameTimeNanos - lastRenderedFrameTimeNs
-        if (actualFrameDeltaNs < expectedFrameDeltaNs) {
-            choreographer?.postFrameCallback(frameCallback) // 节流：还没到下一帧节奏
-            return@FrameCallback
-        }
-
-        val next = if (renderQueue.isNotEmpty()) renderQueue.removeFirst() else null
-        val hasMore = renderQueue.isNotEmpty()
-        if (next != null) {
-            releaseFrame(next, render = true, frameTimeNanos = frameTimeNanos)
-            lastRenderedFrameTimeNs = frameTimeNanos
-        }
-        if (hasMore && state == DecoderState.STARTED) {
-            choreographer?.postFrameCallback(frameCallback)
-        } else {
-            vsyncScheduled = false
-        }
-    }
-
-    /** 入队一帧等待 vsync 渲染；超过 2 帧则丢最旧帧。只在 codecThread looper 上调用。 */
-    private fun offerRenderFrame(frame: DecodedOutputFrame) {
-        if (state != DecoderState.STARTED) {
-            releaseFrame(frame, render = false, frameTimeNanos = 0L)
-            return
-        }
-        renderQueue.addLast(frame)
-        while (renderQueue.size > MAX_RENDER_QUEUE) {
-            val dropped = renderQueue.removeFirst()
-            tracker.incrementDroppedFrames()
-            releaseFrame(dropped, render = false, frameTimeNanos = 0L)
-        }
-        if (!vsyncScheduled) {
-            vsyncScheduled = true
-            choreographer?.postFrameCallback(frameCallback)
-        }
-    }
-
-    /** release 一个输出缓冲。只在 codecThread looper 上调用 → 与所有其他 codec 操作串行。 */
-    private fun releaseFrame(frame: DecodedOutputFrame, render: Boolean, frameTimeNanos: Long) {
-        try {
-            if (render) {
-                runCatching {
-                    activeCodec()?.releaseOutputBuffer(frame.bufferIndex, frameTimeNanos)
-                }.getOrElse {
-                    runCatching {
-                        activeCodec()?.releaseOutputBuffer(frame.bufferIndex, true)
-                    }
-                }
-                tracker.recordRender(frame.dequeuedAtNs)
-            } else {
-                runCatching {
-                    activeCodec()?.releaseOutputBuffer(frame.bufferIndex, false)
-                }
-            }
-        } catch (e: Exception) {
-            // 只记录不 rethrow：异常（含 codec 已释放）不会传播成线程未捕获崩溃
-            Log.w(TAG, "releaseFrame failed for buffer index: ${frame.bufferIndex}", e)
-        }
-    }
-
-    private fun activeCodec(): MediaCodec? = codec
 
     // ============================================================
     // codec 生命周期（全部只在 codecThread looper 上执行）
     // ============================================================
-
-    private fun createCodecInternal() {
-        try {
-            val activeSurface = targetSurface ?: getDummySurface()
-            val isDummy = (targetSurface == null)
-            Log.i(TAG, "createCodecInternal: ${width}x${height} surface=$activeSurface valid=${activeSurface.isValid} isDummy=$isDummy")
-            val result = VideoDecoderTuning.createConfiguredDecoder(VIDEO_MIME, width, height, activeSurface)
-            codec = result.codec
-            tracker.decodeMode = if (result.isHardware) "硬件" else "软件"
-            Log.i(TAG, "Codec configured and started: ${width}x${height} via ${result.decoderName} [${result.appliedOptions.joinToString()}]")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to create/start MediaCodec", e)
-        }
-    }
-
-    /**
-     * release codec。顺序严格 stop → release 不可调换：先 codec.stop() 让所有
-     * dequeue/queue 立即失败返回，再 codec.release() 回收 native DirectBuffer。
-     * 由于本方法只会在 codecThread looper 上、且所有 codec 操作都串行于同一 looper，
-     * release 时绝无任何在途的 releaseOutputBuffer/put —— use-after-free 从结构上杜绝。
-     */
-    private fun releaseCodecInternal() {
-        val activeCodec = codec
-        if (activeCodec != null) {
-            try {
-                activeCodec.stop()
-            } catch (e: Exception) {
-                Log.d(TAG, "codec.stop() failed during release", e)
-            }
-            try {
-                activeCodec.release()
-            } catch (e: Exception) {
-                Log.d(TAG, "codec.release() failed during release", e)
-            }
-            codec = null
-            Log.i(TAG, "Codec released")
-        }
-    }
 
     /**
      * 停止路径（仅 codecThread looper 上执行）。固化顺序：
@@ -629,13 +478,7 @@ class H264StreamDecoder(
      */
     private fun stopInternalOnCodecThread() {
         // ① 停止渲染 & drain，释放仍在队列的 buffer
-        vsyncScheduled = false
-        choreographer?.removeFrameCallback(frameCallback)
-        while (renderQueue.isNotEmpty()) {
-            val f = renderQueue.removeFirst()
-            tracker.incrementDroppedFrames()
-            releaseFrame(f, render = false, frameTimeNanos = 0L)
-        }
+        renderScheduler.stopAndDrain()
         // ② join reader（断 socket 后应已退出；此处 join 仅清理线程资源，超时不影响安全性，
         //    因为 reader 永不触碰 codec）
         readerThread?.let { rt ->
@@ -644,12 +487,9 @@ class H264StreamDecoder(
         }
         readerThread = null
         // ③ release codec
-        releaseCodecInternal()
+        codecSession.release()
         // ④ 释放 dummy surface
-        dummySurface?.release()
-        dummySurface = null
-        dummySurfaceTexture?.release()
-        dummySurfaceTexture = null
+        codecSession.releaseDummySurface()
         frameQueue.clear()
     }
 
@@ -661,31 +501,8 @@ class H264StreamDecoder(
     private fun rebuildCodec() {
         if (state != DecoderState.STARTED) return
         Log.i(TAG, "rebuildCodec: ${width}x${height}")
-        vsyncScheduled = false
-        choreographer?.removeFrameCallback(frameCallback)
-        while (renderQueue.isNotEmpty()) {
-            val f = renderQueue.removeFirst()
-            tracker.incrementDroppedFrames()
-            releaseFrame(f, render = false, frameTimeNanos = 0L)
-        }
-        releaseCodecInternal()
-        createCodecInternal()
-    }
-
-    // ============================================================
-    // dummy surface（只在 codecThread looper 上访问）
-    // ============================================================
-
-    private fun getDummySurface(): Surface {
-        val ds = dummySurface
-        if (ds != null && ds.isValid) {
-            return ds
-        }
-        dummySurfaceTexture?.release()
-        val st = SurfaceTexture(0)
-        dummySurfaceTexture = st
-        val newDs = Surface(st)
-        dummySurface = newDs
-        return newDs
+        renderScheduler.stopAndDrain()
+        codecSession.release()
+        codecSession.create(width, height)
     }
 }
