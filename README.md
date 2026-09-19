@@ -1,44 +1,22 @@
 # 屏幕分身（多虚拟显示控制）
 
-本应用是一个基于 **Shizuku** 和 **scrcpy** 技术开发的 Android 辅助工具，用于在手机上创建多个“虚拟屏幕”，并能在这些独立的屏幕中运行不同的应用。主要适用于多开挂机、多任务并行等场景。
+> **[已废弃]** 本分支（`deprecated/daemon-architecture`）是一条已被放弃的演进方向，仅作存档保留，不再维护。主线已回退到 v1.0.37 基线（`main`）重新演进。
 
-## 主要功能
+## 废弃原因
 
-- **创建虚拟屏幕**：支持自定义分辨率与屏幕密度（DPI）创建虚拟屏幕。
-- **独立运行应用**：从应用列表中选择任意应用，让其在指定的虚拟屏幕中单独运行。
-- **预览与控制**：支持实时预览虚拟屏幕的画面，并可以直接通过触摸进行交互与控制。
+架构过于臃肿，难以维护。
 
-## 使用前提
+## 本分支架构说明
 
-1. **安装并启动 Shizuku**：本应用依赖 [Shizuku](https://shizuku.rikka.app/) 服务。请先在您的安卓设备上安装并激活 Shizuku（可通过无线调试或 Root 激活）。
-2. **授予权限**：首次打开本应用时，请按照提示授予 Shizuku 访问权限。
+该分支采用客户端-守护进程分离架构，主要组成：
 
-## 快速上手
-
-1. **启动服务**：确认 Shizuku 服务已启动(现已支持root拉起)，打开“屏幕分身”应用。
-2. **新建屏幕**：输入您想要的宽度、高度和 DPI（例如 1080, 2400, 440），点击创建。
-3. **管理与使用**：
-   - **Play**：打开预览窗口，支持触摸操作。
-   - **Launch**：选择想要在该屏幕中启动的应用。
-   - **Delete**：删除/释放该虚拟屏幕。
-
-## 常见问题
-
-- **创建屏幕时出现 `packageName must match the calling uid`？**
-  请确保以 **adb / shell 身份**激活 Shizuku，而非以 Root 身份激活。
-  部分设备的 [`DisplayManagerService`](https://github.com/cn00/android/blob/master/services/core/java/com/android/server/display/DisplayManagerService.java#L1532) 会校验调用者的 UID 与 packageName 是否匹配；而scrcpy 通过将 `PACKAGE_NAME` 固定为 `"com.android.shell"`，以 Root 身份运行时 会导致二者不匹配从而抛出 `SecurityException`。（ 本项目暂未对此进行修复。）
-
-- 端口监听和连接其他设备有bug，基本用不了，最近没空，过段时间再修，视频传输也存在一定问题。应该需要重新调整出一个清晰的架构。
-
-- **其他问题 **
-  有其他问题或建议，欢迎在 [GitHub 仓库](https://github.com/Ynkcc/VirtualDisplay/issues) 提交问题。
-  消极维护，有能力的话建议自行处理。
-
-## 致谢
-
-本项目的实现离不开以下开源项目的支持：
-- [Shizuku](https://github.com/RikkaApps/Shizuku) - 提供免 Root/特权 API 访问能力。
-- [scrcpy](https://github.com/Genymobile/scrcpy) - 提供高效的屏幕控制与输入注入逻辑。
+- **`app/`（Android 客户端，Kotlin + Compose）**
+  - `data/`：分层配置（`local`/`remote`/`process`/`repository`）、按职责拆分的设置单元；
+  - `protocol/` + `net/` + `rpc/`：与守护进程通信的自定义 TCP 协议、连接管理与重连逻辑；
+  - `process/`：守护进程的拉起（Shizuku/Root）、权限预检与生命周期管理；
+  - `decoder/` + `video/`：视频流解码与渲染（含旋转/缩放处理）；
+  - `ui/`：Compose 界面（虚拟屏幕管理、应用选择、远程节点编辑与操控预览）。
+- **`daemon/`（子模块，VirtualDisplayDaemon）**：基于 scrcpy 补丁序列构建的 native 守护进程，负责虚拟显示器的创建/销毁、输入注入与视频流转发，常驻后台并监听端口，支持远程节点接入。
 
 ## 开源协议
 
