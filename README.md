@@ -31,6 +31,13 @@
   请确保以 **adb / shell 身份**激活 Shizuku，而非以 Root 身份激活。
   部分设备的 [`DisplayManagerService`](https://github.com/cn00/android/blob/master/services/core/java/com/android/server/display/DisplayManagerService.java#L1532) 会校验调用者的 UID 与 packageName 是否匹配；而scrcpy 通过将 `PACKAGE_NAME` 固定为 `"com.android.shell"`，以 Root 身份运行时 会导致二者不匹配从而抛出 `SecurityException`。（ 本项目暂未对此进行修复。）
 
+## 废弃分支说明
+
+> `deprecated/daemon-architecture` 分支已被废弃，仅作存档保留，不再维护。
+
+- **影响提交范围**：`v1.0.37..0553336`（即 v1.1.1 ~ v1.1.7 之间的全部提交，共 75 个，另含分支末端的文档提交 `7536004`）。这些提交均围绕"客户端-守护进程分离架构"展开，未合入当前主线。
+- **废弃理由**：客户端-守护进程分离架构过于臃肿，难以维护，已放弃该演进方向，主线回退到 v1.0.37 基线重新演进。
+
 ## 致谢
 
 本项目的实现离不开以下开源项目的支持：
