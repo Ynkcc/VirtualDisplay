@@ -1,5 +1,17 @@
 # 屏幕分身（多虚拟显示控制）
 
+> [!WARNING]
+> **本项目已废弃，转为归档（Archived）状态，不再维护。**
+>
+> 废弃原因：我计划收窄功能面，希望只保留"**创建虚拟屏幕及持久化**"这一核心职责，不再继续演进预览、控制、应用启动等上层功能。
+>
+> 安利以下项目：
+>
+> - [Miuzarte/ScrcpyForAndroid](https://github.com/Miuzarte/ScrcpyForAndroid) —— 用于**控制设备**，提供接近原版 scrcpy 的体验。
+> - [Ynkcc/MoreDisplay](https://github.com/Ynkcc/MoreDisplay) —— 用于**创建并持久化屏幕**。
+>
+> 感谢所有使用过本项目的人。以下内容仅作为历史文档保留。
+
 本应用是一个基于 **Shizuku** 和 **scrcpy** 技术开发的 Android 辅助工具，用于在手机上创建多个“虚拟屏幕”，并能在这些独立的屏幕中运行不同的应用。主要适用于多开挂机、多任务并行等场景。
 
 ## 主要功能
